@@ -15,7 +15,7 @@ flush = dag.flush
 reset = dag.reset
 
 from .instruments import VanillaOption, Stock, Bond, Forward, Future, FXPair, FXForward
-from .trading import PositionTable, TradeBlotter, TradingDashboard
+from .trading import PositionTable, TradeBlotter, TradingDashboard, Book, Trade, Position, TradingSystem
 
 __all__ = [
     # Core functions
@@ -34,10 +34,15 @@ __all__ = [
     # Instruments - FX
     "FXPair",
     "FXForward",
-    # Trading
+    # Trading - Legacy table-based
     "PositionTable",
     "TradeBlotter",
     "TradingDashboard",
+    # Trading - dag.Model-based
+    "Book",
+    "Trade",
+    "Position",
+    "TradingSystem",
 ]
 
 __version__ = "0.1.0"

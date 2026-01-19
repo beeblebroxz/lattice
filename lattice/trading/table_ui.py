@@ -200,6 +200,7 @@ def run_table_ui(
     get_stats: Optional[Callable[[], Dict[str, Any]]] = None,
     port: int = 8080,
     open_browser: bool = True,
+    simulate_callback: Optional[Callable] = None,
 ) -> None:
     """
     Run the table UI server.
@@ -211,6 +212,8 @@ def run_table_ui(
         get_stats: Optional function to get stats
         port: Server port (default 8080)
         open_browser: Whether to open browser automatically
+        simulate_callback: Optional async function for simulation mode.
+                          Called with a send_update callback for triggering refreshes.
     """
     app = create_table_app(title, columns, get_rows, get_stats)
 
@@ -222,6 +225,21 @@ def run_table_ui(
 
         async def on_startup(app):
             asyncio.create_task(open_browser_task())
+            # Start simulation if provided
+            if simulate_callback:
+                async def send_update():
+                    # The UI auto-refreshes, so this is a no-op
+                    # Could be extended for WebSocket push if needed
+                    pass
+                asyncio.create_task(simulate_callback(send_update))
+
+        app.on_startup.append(on_startup)
+    elif simulate_callback:
+        # Start simulation even without browser
+        async def on_startup(app):
+            async def send_update():
+                pass
+            asyncio.create_task(simulate_callback(send_update))
 
         app.on_startup.append(on_startup)
 
