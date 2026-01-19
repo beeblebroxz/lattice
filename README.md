@@ -29,6 +29,8 @@ Built on [dag](https://github.com/beeblebroxz/dag) (computation graphs) and [liv
 ## Highlights
 
 - **Reactive Pricing** - Change an input, all dependent values update automatically
+- **Multi-Asset Support** - Options, stocks, bonds, forwards, futures, FX
+- **Trading Books** - Full position management with P&L tracking
 - **Real-time Web UI** - Visualize and interact with models in your browser
 - **Black-Scholes Greeks** - Delta, Gamma, Vega, Theta, Rho computed efficiently
 - **25x Faster Tables** - Position and trade management using livetable
@@ -88,6 +90,44 @@ print(f"Theta: {option.Theta():.4f}")
 # Changes automatically invalidate dependent calculations
 option.Spot.set(110.0)
 print(f"New Price: ${option.Price():.4f}")  # Recomputed automatically
+```
+
+### Other Instruments
+
+```python
+from lattice import Stock, Bond, Forward, Future, FXPair
+
+# Stocks
+stock = Stock()
+stock.Symbol.set("AAPL")
+stock.Price.set(150.0)
+stock.Dividend.set(0.96)
+print(f"Dividend Yield: {stock.DividendYield():.2%}")
+
+# Bonds
+bond = Bond()
+bond.FaceValue.set(1000.0)
+bond.CouponRate.set(0.05)
+bond.YieldToMaturity.set(0.04)
+bond.MaturityYears.set(10)
+print(f"Bond Price: ${bond.Price():.2f}")
+print(f"Duration: {bond.Duration():.2f} years")
+
+# Forwards
+forward = Forward()
+forward.Spot.set(100.0)
+forward.Rate.set(0.05)
+forward.TimeToExpiry.set(1.0)
+print(f"Forward Price: ${forward.ForwardPrice():.2f}")
+
+# FX Pairs
+eurusd = FXPair()
+eurusd.BaseCurrency.set("EUR")
+eurusd.QuoteCurrency.set("USD")
+eurusd.Spot.set(1.0850)
+eurusd.BaseRate.set(0.04)
+eurusd.QuoteRate.set(0.05)
+print(f"EUR/USD: {eurusd.Spot():.4f}")
 ```
 
 ### Interactive Web UI
@@ -174,6 +214,42 @@ blotter.record("AAPL_P_145_Jun24", "SELL", 5, 3.20)
 
 print(f"Total notional: ${blotter.total_notional():,.2f}")
 print(f"Buy trades: {len(blotter.buys())}")
+
+# Show interactive dashboard
+blotter.show()  # Opens browser with real-time updates
+```
+
+### Trading System with Books
+
+```python
+from lattice.trading import TradingSystem
+
+# Create a trading system
+system = TradingSystem()
+
+# Create books (trading desks, customer accounts, etc.)
+desk = system.book("MARKET_MAKER", book_type="trading")
+client = system.book("CLIENT_ABC", book_type="customer")
+
+# Execute trades between books
+system.trade(buyer=desk, seller=client, symbol="AAPL_C_150", quantity=10, price=5.25)
+system.trade(buyer=desk, seller=client, symbol="GOOGL_C_140", quantity=20, price=8.00)
+system.trade(buyer=client, seller=desk, symbol="AAPL_C_150", quantity=5, price=5.50)
+
+# Access reactive P&L (automatically updates when market prices change)
+print(f"Market Maker P&L: ${desk.TotalPnL():.2f}")
+print(f"Client P&L: ${client.TotalPnL():.2f}")
+
+# Update market prices - P&L recomputes automatically
+system.set_market_price("AAPL_C_150", 6.00)
+print(f"MM P&L after market move: ${desk.TotalPnL():.2f}")
+
+# View positions per book
+for pos in desk.Positions():
+    print(f"{pos.Symbol()}: {pos.Quantity()} @ ${pos.AvgPrice():.2f}")
+
+# Show interactive dashboard
+system.show()  # Opens browser with all books and positions
 ```
 
 ## Examples
@@ -195,11 +271,15 @@ python examples/quick_start.py
 ```
                          Your Code
     option.Spot.set(105) --> option.Price() --> Delta, Gamma...
+    system.trade(...)    --> book.TotalPnL() --> Positions, P&L...
                               |
                               v
     +-----------------------------------------------------------+
     |                       Lattice                             |
-    |   VanillaOption | PositionTable | TradeBlotter | Web UI   |
+    |  Instruments: VanillaOption | Stock | Bond | FX | Forward |
+    |  Trading:     Book | Trade | Position | TradingSystem     |
+    |  Tables:      PositionTable | TradeBlotter                |
+    |  UI:          DagApp | show() | Dashboards                |
     +-----------------------------------------------------------+
               |                          |
               v                          v
@@ -220,12 +300,27 @@ python examples/quick_start.py
 | Class | Description |
 |-------|-------------|
 | `VanillaOption` | European vanilla option with Black-Scholes pricing |
+| `Stock` | Equity with price, dividend, and market cap |
+| `Bond` | Fixed income with coupon, yield, duration, convexity |
+| `Forward` | Forward contract with cost-of-carry pricing |
+| `Future` | Exchange-traded futures contract |
+| `FXPair` | Currency pair with spot and forward rates |
+| `FXForward` | FX forward contract with interest rate parity |
 
-### Trading
+### Trading (dag.Model-based)
 
 | Class | Description |
 |-------|-------------|
-| `PositionTable` | Position tracking with filtering |
+| `TradingSystem` | Orchestrator for books, trades, and positions |
+| `Book` | Trading book with reactive P&L aggregation |
+| `Trade` | Transaction between two books |
+| `Position` | Position in a single instrument with P&L |
+
+### Trading (livetable-based)
+
+| Class | Description |
+|-------|-------------|
+| `PositionTable` | Fast position tracking with filtering |
 | `TradeBlotter` | Trade recording and analysis |
 
 ### UI
@@ -235,6 +330,9 @@ python examples/quick_start.py
 | `show(model)` | Quick display of any dag model |
 | `DagApp` | Full-featured app with custom layouts |
 | `bind(node, ...)` | Connect dag nodes to UI elements |
+| `blotter.show()` | Interactive trade blotter dashboard |
+| `positions.show()` | Interactive position table dashboard |
+| `system.show()` | Trading system dashboard with all books |
 
 ### Greeks
 
