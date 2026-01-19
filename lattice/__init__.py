@@ -6,6 +6,7 @@ Built on dag (computation graphs) and livetable (fast tables).
 Submodules:
     lattice.ui - Reactive web UI framework (DagApp, show, bind)
     lattice.risk - Risk analysis and sensitivity calculations
+    lattice.store - Path-based persistent storage for dag.Model objects
 """
 
 import dag
@@ -18,14 +19,16 @@ reset = dag.reset
 from .instruments import VanillaOption, Stock, Bond, Forward, Future, FXPair, FXForward
 from .trading import PositionTable, TradeBlotter, TradingDashboard, Book, Trade, Position, TradingSystem
 from . import risk
+from . import store
 
 __all__ = [
     # Core functions
     "scenario",
     "flush",
     "reset",
-    # Risk module
+    # Submodules
     "risk",
+    "store",
     # Instruments - Options
     "VanillaOption",
     # Instruments - Equity
