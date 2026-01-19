@@ -46,11 +46,14 @@ class SQLiteBackend(StorageBackend):
                 type_name TEXT NOT NULL,
                 data TEXT NOT NULL,
                 version INTEGER NOT NULL DEFAULT 1,
+                schema_version INTEGER NOT NULL DEFAULT 1,
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL
             )
             """
         )
+        # Migrate existing tables to add schema_version if needed
+        self._migrate_schema()
         # Index for prefix queries
         self._conn.execute(
             """
@@ -58,6 +61,15 @@ class SQLiteBackend(StorageBackend):
             """
         )
         self._conn.commit()
+
+    def _migrate_schema(self) -> None:
+        """Add schema_version column to existing databases if missing."""
+        cursor = self._conn.execute("PRAGMA table_info(objects)")
+        columns = [row["name"] for row in cursor.fetchall()]
+        if "schema_version" not in columns:
+            self._conn.execute(
+                "ALTER TABLE objects ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1"
+            )
 
     def close(self) -> None:
         """Close the database connection."""
@@ -79,6 +91,7 @@ class SQLiteBackend(StorageBackend):
             type_name=row["type_name"],
             data=json.loads(row["data"]),
             version=row["version"],
+            schema_version=row["schema_version"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -88,14 +101,15 @@ class SQLiteBackend(StorageBackend):
         self._conn.execute(
             """
             INSERT OR REPLACE INTO objects
-                (path, type_name, data, version, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (path, type_name, data, version, schema_version, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 obj.path,
                 obj.type_name,
                 json.dumps(obj.data),
                 obj.version,
+                obj.schema_version,
                 obj.created_at,
                 obj.updated_at,
             ),

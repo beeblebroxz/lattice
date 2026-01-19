@@ -27,48 +27,50 @@ class Forward(Instrument):
     """
 
     # ==================== Inputs ====================
+    # Contract terms are Persisted (saved to DB)
+    # Market data is Input | Overridable (transient, re-fetched on load)
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def Underlying(self) -> str:
         """Underlying asset identifier."""
         return ""
 
     @dag.computed(dag.Input | dag.Overridable)
     def Spot(self) -> float:
-        """Current spot price of the underlying."""
+        """Current spot price of the underlying (market data - not persisted)."""
         return 100.0
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Input | dag.Overridable)
     def Rate(self) -> float:
-        """Risk-free interest rate (annualized, as decimal)."""
+        """Risk-free interest rate (market data - not persisted)."""
         return 0.05
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Input | dag.Overridable)
     def DividendYield(self) -> float:
-        """Dividend yield or convenience yield (annualized, as decimal)."""
+        """Dividend yield or convenience yield (market data - not persisted)."""
         return 0.0
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Input | dag.Overridable)
     def StorageCost(self) -> float:
-        """Storage cost rate for commodities (annualized, as decimal)."""
+        """Storage cost rate for commodities (market data - not persisted)."""
         return 0.0
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def TimeToExpiry(self) -> float:
         """Time to delivery/expiry in years."""
         return 1.0
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def ContractPrice(self) -> float:
         """Contracted forward price (for valuing existing forwards)."""
         return 0.0
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def IsLong(self) -> bool:
         """True if long the forward (agree to buy), False if short (agree to sell)."""
         return True
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def ContractSize(self) -> float:
         """Number of units in the contract."""
         return 1.0
@@ -219,14 +221,14 @@ class Future(Forward):
         print(future.NotionalValue())  # Total notional value
     """
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Input | dag.Overridable)
     def InitialMargin(self) -> float:
-        """Initial margin requirement per contract."""
+        """Initial margin requirement per contract (market data - not persisted)."""
         return 0.0
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Input | dag.Overridable)
     def MaintenanceMargin(self) -> float:
-        """Maintenance margin requirement per contract."""
+        """Maintenance margin requirement per contract (market data - not persisted)."""
         return 0.0
 
     @dag.computed

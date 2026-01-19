@@ -24,33 +24,35 @@ class Bond(Instrument):
     """
 
     # ==================== Inputs ====================
+    # Contract terms are Persisted (saved to DB)
+    # Market data (YieldToMaturity) is Input | Overridable (transient)
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def Issuer(self) -> str:
         """Bond issuer identifier."""
         return ""
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def FaceValue(self) -> float:
         """Face (par) value of the bond."""
         return 1000.0
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def CouponRate(self) -> float:
         """Annual coupon rate (as decimal, e.g., 0.05 = 5%)."""
         return 0.05
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def Maturity(self) -> float:
         """Time to maturity in years."""
         return 10.0
 
     @dag.computed(dag.Input | dag.Overridable)
     def YieldToMaturity(self) -> float:
-        """Yield to maturity (as decimal, e.g., 0.04 = 4%)."""
+        """Yield to maturity (market data - not persisted)."""
         return 0.05
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def Frequency(self) -> int:
         """Coupon payment frequency per year (1=annual, 2=semi-annual, 4=quarterly)."""
         return 2

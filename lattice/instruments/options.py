@@ -30,43 +30,45 @@ class VanillaOption(Instrument):
     """
 
     # ==================== Inputs ====================
+    # Contract terms are Persisted (saved to DB)
+    # Market data is Input | Overridable (transient, re-fetched on load)
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def Underlying(self) -> str:
         """Underlying asset identifier."""
         return ""
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def Strike(self) -> float:
         """Option strike price."""
         return 100.0
 
     @dag.computed(dag.Input | dag.Overridable)
     def Spot(self) -> float:
-        """Current underlying price."""
+        """Current underlying price (market data - not persisted)."""
         return 100.0
 
     @dag.computed(dag.Input | dag.Overridable)
     def Volatility(self) -> float:
-        """Implied volatility (annualized, as decimal e.g., 0.20 = 20%)."""
+        """Implied volatility (market data - not persisted)."""
         return 0.20
 
     @dag.computed(dag.Input | dag.Overridable)
     def Rate(self) -> float:
-        """Risk-free interest rate (annualized, as decimal)."""
+        """Risk-free interest rate (market data - not persisted)."""
         return 0.05
 
     @dag.computed(dag.Input | dag.Overridable)
     def Dividend(self) -> float:
-        """Continuous dividend yield (annualized, as decimal)."""
+        """Continuous dividend yield (market data - not persisted)."""
         return 0.0
 
-    @dag.computed(dag.Input | dag.Overridable)
+    @dag.computed(dag.Persisted | dag.Overridable)
     def TimeToExpiry(self) -> float:
-        """Time to expiration in years."""
+        """Time to expiration in years (persisted and overridable for scenarios)."""
         return 1.0
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def IsCall(self) -> bool:
         """True for call option, False for put option."""
         return True

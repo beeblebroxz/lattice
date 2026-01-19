@@ -27,30 +27,32 @@ class FXPair(Instrument):
     """
 
     # ==================== Inputs ====================
+    # Identity fields are Persisted (saved to DB)
+    # Market data is Input | Overridable (transient, re-fetched on load)
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def BaseCurrency(self) -> str:
         """Base currency (the currency being bought/sold)."""
         return "EUR"
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def QuoteCurrency(self) -> str:
         """Quote currency (the currency used to express the price)."""
         return "USD"
 
     @dag.computed(dag.Input | dag.Overridable)
     def Spot(self) -> float:
-        """Spot exchange rate (quote per base)."""
+        """Spot exchange rate (market data - not persisted)."""
         return 1.0
 
     @dag.computed(dag.Input | dag.Overridable)
     def BaseRate(self) -> float:
-        """Interest rate in the base currency (annualized, as decimal)."""
+        """Interest rate in the base currency (market data - not persisted)."""
         return 0.05
 
     @dag.computed(dag.Input | dag.Overridable)
     def QuoteRate(self) -> float:
-        """Interest rate in the quote currency (annualized, as decimal)."""
+        """Interest rate in the quote currency (market data - not persisted)."""
         return 0.05
 
     @dag.computed(dag.Input)
@@ -58,7 +60,7 @@ class FXPair(Instrument):
         """Time to delivery in years."""
         return 1.0
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def BaseNotional(self) -> float:
         """Notional amount in base currency."""
         return 1000000.0  # 1 million
@@ -199,14 +201,14 @@ class FXForward(FXPair):
         print(fwd.Value())           # Current value of the forward
     """
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def ContractRate(self) -> float:
-        """Contracted forward rate."""
+        """Contracted forward rate (persisted - contract term)."""
         return 0.0
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def IsLongBase(self) -> bool:
-        """True if long base currency (buying base, selling quote)."""
+        """True if long base currency (persisted - contract term)."""
         return True
 
     @dag.computed

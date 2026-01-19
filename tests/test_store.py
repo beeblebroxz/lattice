@@ -74,54 +74,59 @@ class TestSerializer:
     """Tests for Serializer."""
 
     def test_serialize_vanilla_option(self):
-        """Can serialize VanillaOption."""
+        """Can serialize VanillaOption - only Persisted fields."""
         option = VanillaOption()
         option.Strike.set(150.0)
-        option.Spot.set(155.0)
-        option.Volatility.set(0.25)
+        option.Spot.set(155.0)  # Not Persisted - won't be serialized
+        option.Volatility.set(0.25)  # Not Persisted - won't be serialized
         option.IsCall.set(True)
 
         serializer = Serializer()
         data = serializer.serialize(option)
 
+        # Persisted fields are serialized
         assert data["Strike"] == 150.0
-        assert data["Spot"] == 155.0
-        assert data["Volatility"] == 0.25
         assert data["IsCall"] is True
 
+        # Non-Persisted fields (Input | Overridable) are NOT serialized
+        assert "Spot" not in data
+        assert "Volatility" not in data
+
     def test_deserialize_vanilla_option(self):
-        """Can deserialize VanillaOption."""
+        """Can deserialize VanillaOption - only Persisted fields restored."""
         data = {
             "Strike": 150.0,
-            "Spot": 155.0,
-            "Volatility": 0.25,
-            "Rate": 0.05,
-            "TimeToExpiry": 1.0,
-            "IsCall": True,
+            "TimeToExpiry": 0.5,
+            "IsCall": False,
         }
 
         serializer = Serializer()
         option = serializer.deserialize(VanillaOption, data)
 
+        # Persisted fields restored
         assert option.Strike() == 150.0
-        assert option.Spot() == 155.0
-        assert option.Volatility() == 0.25
-        assert option.IsCall() is True
+        assert option.TimeToExpiry() == 0.5
+        assert option.IsCall() is False
+
+        # Non-Persisted fields use defaults
+        assert option.Spot() == 100.0  # Default
+        assert option.Volatility() == 0.20  # Default
 
     def test_roundtrip(self):
-        """Serialize then deserialize preserves values."""
+        """Serialize then deserialize preserves Persisted values."""
         option = VanillaOption()
         option.Strike.set(100.0)
-        option.Spot.set(105.0)
-        option.Volatility.set(0.20)
+        option.IsCall.set(False)
+        option.TimeToExpiry.set(0.5)
 
         serializer = Serializer()
         data = serializer.serialize(option)
         loaded = serializer.deserialize(VanillaOption, data)
 
+        # Persisted fields preserved
         assert loaded.Strike() == option.Strike()
-        assert loaded.Spot() == option.Spot()
-        assert loaded.Volatility() == option.Volatility()
+        assert loaded.IsCall() == option.IsCall()
+        assert loaded.TimeToExpiry() == option.TimeToExpiry()
 
 
 class TestMemoryBackend:
@@ -418,7 +423,7 @@ class TestSQLiteStore:
     """Tests for Store with SQLite backend."""
 
     def test_sqlite_persistence(self):
-        """Objects persist across connections."""
+        """Objects persist across connections - only Persisted fields."""
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
             db_path = f.name
 
@@ -428,15 +433,19 @@ class TestSQLiteStore:
                 db.register_type("/Instruments/*", VanillaOption)
                 option = VanillaOption()
                 option.Strike.set(150.0)
-                option.Spot.set(155.0)
+                option.IsCall.set(False)
+                option.Spot.set(155.0)  # Not Persisted - won't survive reload
                 db["/Instruments/AAPL_C_150"] = option
 
             # Read in new connection
             with connect(f"sqlite:///{db_path}") as db:
                 db.register_type("/Instruments/*", VanillaOption)
                 loaded = db["/Instruments/AAPL_C_150"]
+                # Persisted fields preserved
                 assert loaded.Strike() == 150.0
-                assert loaded.Spot() == 155.0
+                assert loaded.IsCall() is False
+                # Non-Persisted field reverts to default
+                assert loaded.Spot() == 100.0  # Default, not 155.0
         finally:
             os.unlink(db_path)
 
@@ -644,16 +653,358 @@ class TestStoreNew:
         """Can modify and save object created with new()."""
         option = memory_store.new(VanillaOption, "/Instruments/TEST")
         option.Strike.set(150.0)
-        option.Spot.set(155.0)
+        option.IsCall.set(False)
+        option.Spot.set(155.0)  # Not Persisted - won't survive reload
         option.save()
 
-        # Verify persistence
+        # Verify persistence of Persisted fields
         memory_store.clear_cache()
         loaded = memory_store["/Instruments/TEST"]
         assert loaded.Strike() == 150.0
-        assert loaded.Spot() == 155.0
+        assert loaded.IsCall() is False
+        # Non-Persisted field reverts to default
+        assert loaded.Spot() == 100.0
 
     def test_new_type_mismatch_raises(self, memory_store):
         """new() raises TypeMismatchError for wrong type."""
         with pytest.raises(TypeMismatchError):
             memory_store.new(Stock, "/Instruments/AAPL")  # Expects VanillaOption
+
+
+class TestExplicitPersistence:
+    """Tests for explicit persistence via dag.Serialized flag."""
+
+    def test_only_serialized_fields_persisted(self):
+        """Only fields with Serialized flag are persisted."""
+        # VanillaOption has Persisted (= Input | Serialized) for Strike, IsCall, etc.
+        # but Input | Overridable (no Serialized) for Spot, Volatility, Rate
+        option = VanillaOption()
+        option.Strike.set(150.0)
+        option.Spot.set(155.0)
+        option.Volatility.set(0.25)
+        option.IsCall.set(True)
+
+        serializer = Serializer()
+        data = serializer.serialize(option)
+
+        # Strike is Persisted - should be serialized
+        assert "Strike" in data
+        assert data["Strike"] == 150.0
+
+        # IsCall is Persisted - should be serialized
+        assert "IsCall" in data
+        assert data["IsCall"] is True
+
+        # Spot, Volatility, Rate are Input | Overridable (not Serialized)
+        # They should NOT be serialized
+        assert "Spot" not in data
+        assert "Volatility" not in data
+        assert "Rate" not in data
+
+    def test_persisted_fields_restored(self):
+        """Persisted fields are restored on load, others use defaults."""
+        data = {
+            "Strike": 150.0,
+            "IsCall": False,
+            "TimeToExpiry": 0.5,
+        }
+
+        serializer = Serializer()
+        option = serializer.deserialize(VanillaOption, data)
+
+        # Persisted fields restored
+        assert option.Strike() == 150.0
+        assert option.IsCall() is False
+        assert option.TimeToExpiry() == 0.5
+
+        # Non-persisted fields use their defaults
+        assert option.Spot() == 100.0  # Default
+        assert option.Volatility() == 0.20  # Default
+        assert option.Rate() == 0.05  # Default
+
+    def test_roundtrip_persisted_only(self):
+        """Roundtrip only preserves Persisted fields."""
+        option = VanillaOption()
+        option.Strike.set(150.0)
+        option.Spot.set(200.0)  # Will be lost (not Persisted)
+        option.IsCall.set(False)
+
+        serializer = Serializer()
+        data = serializer.serialize(option)
+        loaded = serializer.deserialize(VanillaOption, data)
+
+        # Persisted fields preserved
+        assert loaded.Strike() == 150.0
+        assert loaded.IsCall() is False
+
+        # Non-persisted field reverts to default
+        assert loaded.Spot() == 100.0  # Default, not 200.0
+
+    def test_store_persists_only_serialized_fields(self):
+        """Store only persists Serialized fields."""
+        with connect("memory://") as db:
+            db.register_type("/Instruments/*", VanillaOption)
+
+            option = VanillaOption()
+            option.Strike.set(150.0)
+            option.Spot.set(200.0)  # Won't be persisted
+            option.Volatility.set(0.30)  # Won't be persisted
+            db["/Instruments/TEST"] = option
+
+            # Clear cache and reload
+            db.clear_cache()
+            loaded = db["/Instruments/TEST"]
+
+            # Persisted field preserved
+            assert loaded.Strike() == 150.0
+
+            # Non-persisted fields revert to defaults
+            assert loaded.Spot() == 100.0
+            assert loaded.Volatility() == 0.20
+
+
+class TestSchemaEvolution:
+    """Tests for schema evolution and migration support."""
+
+    def test_schema_version_stored(self):
+        """Schema version is stored with objects."""
+        # Create a model class with explicit schema version
+        class TestModel(dag.Model):
+            _schema_version_ = 2
+
+            @dag.computed(dag.Persisted)
+            def Value(self) -> int:
+                return 0
+
+        with connect("memory://") as db:
+            db.register_type("/Test/*", TestModel)
+
+            obj = TestModel()
+            obj.Value.set(42)
+            db["/Test/A"] = obj
+
+            # Check stored object has schema version
+            stored = db._backend.get("/Test/A")
+            assert stored.schema_version == 2
+
+    def test_schema_version_default(self):
+        """Classes without _schema_version_ default to 1."""
+        serializer = Serializer()
+
+        # VanillaOption doesn't define _schema_version_
+        assert serializer.get_schema_version(VanillaOption) == 1
+
+    def test_unknown_field_warning(self):
+        """Warning emitted for unknown fields in data."""
+        import warnings
+
+        data = {
+            "Strike": 150.0,
+            "UnknownField": "some value",  # Field that doesn't exist
+        }
+
+        serializer = Serializer(warn_extra_fields=True)
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            option = serializer.deserialize(VanillaOption, data)
+
+            # Should have warning about unknown field
+            assert len(w) == 1
+            assert "UnknownField" in str(w[0].message)
+            assert "unknown field" in str(w[0].message).lower()
+
+        # Valid field still restored
+        assert option.Strike() == 150.0
+
+    def test_unknown_field_strict_mode_raises(self):
+        """Strict mode raises error for unknown fields."""
+        from lattice.store.exceptions import SerializationError
+
+        data = {
+            "Strike": 150.0,
+            "RemovedField": "value",
+        }
+
+        serializer = Serializer(strict=True)
+
+        with pytest.raises(SerializationError, match="Unknown field"):
+            serializer.deserialize(VanillaOption, data)
+
+    def test_missing_field_uses_default(self):
+        """Missing fields use their default values."""
+        # Data missing some Persisted fields
+        data = {
+            "Strike": 150.0,
+            # Missing: IsCall, TimeToExpiry, Underlying
+        }
+
+        serializer = Serializer()
+        option = serializer.deserialize(VanillaOption, data)
+
+        # Provided field set
+        assert option.Strike() == 150.0
+
+        # Missing fields use defaults
+        assert option.IsCall() is True  # Default
+        assert option.TimeToExpiry() == 1.0  # Default
+
+    def test_migration_applied(self):
+        """Migrations are applied when schema version differs."""
+        import warnings
+
+        class TestModel(dag.Model):
+            _schema_version_ = 2
+
+            @dag.computed(dag.Persisted)
+            def NewField(self) -> str:
+                return "default"
+
+        def migrate_v1_to_v2(data):
+            # Rename OldField to NewField
+            if "OldField" in data:
+                data["NewField"] = data.pop("OldField")
+            return data
+
+        serializer = Serializer()
+        serializer.register_migration(TestModel, 1, 2, migrate_v1_to_v2)
+
+        # Old data with v1 schema
+        old_data = {"OldField": "migrated value"}
+
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            obj = serializer.deserialize(TestModel, old_data, schema_version=1)
+
+        assert obj.NewField() == "migrated value"
+
+    def test_migration_chain(self):
+        """Migrations can chain across multiple versions."""
+
+        class TestModel(dag.Model):
+            _schema_version_ = 3
+
+            @dag.computed(dag.Persisted)
+            def Field(self) -> str:
+                return ""
+
+        def migrate_v1_to_v2(data):
+            if "field_v1" in data:
+                data["field_v2"] = data.pop("field_v1").upper()
+            return data
+
+        def migrate_v2_to_v3(data):
+            if "field_v2" in data:
+                data["Field"] = data.pop("field_v2") + "_v3"
+            return data
+
+        serializer = Serializer()
+        serializer.register_migration(TestModel, 1, 2, migrate_v1_to_v2)
+        serializer.register_migration(TestModel, 2, 3, migrate_v2_to_v3)
+
+        # v1 data
+        old_data = {"field_v1": "hello"}
+
+        obj = serializer.deserialize(TestModel, old_data, schema_version=1)
+        assert obj.Field() == "HELLO_v3"
+
+    def test_no_migration_needed(self):
+        """No migration when schema versions match."""
+
+        class TestModel(dag.Model):
+            _schema_version_ = 1
+
+            @dag.computed(dag.Persisted)
+            def Value(self) -> int:
+                return 0
+
+        serializer = Serializer()
+        data = {"Value": 42}
+
+        # Same version - no migration needed
+        obj = serializer.deserialize(TestModel, data, schema_version=1)
+        assert obj.Value() == 42
+
+
+class TestSchemaVersionInStore:
+    """Tests for schema version handling in the Store."""
+
+    def test_schema_version_persisted_to_sqlite(self):
+        """Schema version is persisted to SQLite."""
+        import tempfile
+        import os
+
+        class TestModel(dag.Model):
+            _schema_version_ = 5
+
+            @dag.computed(dag.Persisted)
+            def Value(self) -> int:
+                return 0
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            db_path = f.name
+
+        try:
+            # Write with schema version
+            with connect(f"sqlite:///{db_path}") as db:
+                db.register_type("/Test/*", TestModel)
+                obj = TestModel()
+                obj.Value.set(42)
+                db["/Test/A"] = obj
+
+            # Read and check schema version was stored
+            backend = SQLiteBackend()
+            backend.connect(path=db_path)
+            stored = backend.get("/Test/A")
+            assert stored.schema_version == 5
+            backend.close()
+        finally:
+            os.unlink(db_path)
+
+    def test_store_roundtrip_with_migration(self):
+        """Full roundtrip with schema migration works."""
+        # This test simulates:
+        # 1. Save object with old schema
+        # 2. Upgrade class to new schema
+        # 3. Load object - migration should be applied
+
+        # Old version of model (v1)
+        class ModelV1(dag.Model):
+            _schema_version_ = 1
+
+            @dag.computed(dag.Persisted)
+            def OldName(self) -> str:
+                return ""
+
+        # New version of model (v2)
+        class ModelV2(dag.Model):
+            _schema_version_ = 2
+
+            @dag.computed(dag.Persisted)
+            def NewName(self) -> str:
+                return ""
+
+        with connect("memory://") as db:
+            # Register old version and save
+            db.register_type("/Test/*", ModelV1)
+            old_obj = ModelV1()
+            old_obj.OldName.set("test_value")
+            db["/Test/A"] = old_obj
+
+            # Now register migration and use new version
+            db._type_registry.clear()
+            db.register_type("/Test/*", ModelV2)
+
+            def migrate_v1_to_v2(data):
+                if "OldName" in data:
+                    data["NewName"] = data.pop("OldName")
+                return data
+
+            db._serializer.register_migration(ModelV2, 1, 2, migrate_v1_to_v2)
+
+            # Clear cache to force reload
+            db.clear_cache()
+
+            # Load with new schema - migration should apply
+            new_obj = db["/Test/A"]
+            assert new_obj.NewName() == "test_value"

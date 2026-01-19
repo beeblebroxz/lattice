@@ -23,25 +23,27 @@ class Stock(Instrument):
     """
 
     # ==================== Inputs ====================
+    # Identity fields are Persisted (saved to DB)
+    # Market data is Input | Overridable (transient, re-fetched on load)
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def Symbol(self) -> str:
         """Stock ticker symbol."""
         return ""
 
     @dag.computed(dag.Input | dag.Overridable)
     def Spot(self) -> float:
-        """Current stock price."""
+        """Current stock price (market data - not persisted)."""
         return 100.0
 
     @dag.computed(dag.Input | dag.Overridable)
     def DividendYield(self) -> float:
-        """Continuous dividend yield (annualized, as decimal e.g., 0.02 = 2%)."""
+        """Continuous dividend yield (market data - not persisted)."""
         return 0.0
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Input | dag.Overridable)
     def Rate(self) -> float:
-        """Risk-free interest rate (annualized, as decimal)."""
+        """Risk-free interest rate (market data - not persisted)."""
         return 0.05
 
     @dag.computed(dag.Input)

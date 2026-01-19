@@ -110,8 +110,8 @@ class Store:
         if cls is None:
             raise TypeNotRegisteredError(path)
 
-        # Deserialize
-        obj = self._serializer.deserialize(cls, stored.data)
+        # Deserialize (pass schema_version for migration support)
+        obj = self._serializer.deserialize(cls, stored.data, stored.schema_version)
 
         # Set object's store awareness
         obj._store_ref = weakref.ref(self)
@@ -141,6 +141,9 @@ class Store:
         # Serialize
         data = self._serializer.serialize(obj)
 
+        # Get schema version from class
+        schema_version = self._serializer.get_schema_version(type(obj))
+
         # Create stored object
         now = time.time()
         existing = self._backend.get(path)
@@ -150,6 +153,7 @@ class Store:
             type_name=type(obj).__name__,
             data=data,
             version=existing.version + 1 if existing else 1,
+            schema_version=schema_version,
             created_at=existing.created_at if existing else now,
             updated_at=now,
         )

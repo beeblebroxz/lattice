@@ -14,6 +14,7 @@ class StoredObject:
     type_name: str
     data: dict  # Serialized field values (JSON-compatible)
     version: int = 1
+    schema_version: int = 1  # Class schema version for migration support
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
