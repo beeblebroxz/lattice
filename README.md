@@ -31,6 +31,7 @@ Built on [dag](https://github.com/beeblebroxz/dag) (computation graphs) and [liv
 - **Reactive Pricing** - Change an input, all dependent values update automatically
 - **Multi-Asset Support** - Options, stocks, bonds, forwards, futures, FX
 - **Trading Books** - Full position management with P&L tracking
+- **Risk Analysis** - Bump-and-reval Greeks, stress testing, VaR calculations
 - **Real-time Web UI** - Visualize and interact with models in your browser
 - **Black-Scholes Greeks** - Delta, Gamma, Vega, Theta, Rho computed efficiently
 - **25x Faster Tables** - Position and trade management using livetable
@@ -252,6 +253,130 @@ for pos in desk.Positions():
 system.show()  # Opens browser with all books and positions
 ```
 
+### Risk Analysis
+
+The `risk` module provides numerical sensitivity calculations using bump-and-reval that work for any instrument, complementing the closed-form Greeks.
+
+```python
+from lattice import VanillaOption, Bond, risk
+
+# Create an option
+option = VanillaOption()
+option.Spot.set(100.0)
+option.Strike.set(100.0)
+option.Volatility.set(0.20)
+option.Rate.set(0.05)
+option.TimeToExpiry.set(1.0)
+
+# Numerical Greeks (work for ANY instrument)
+print(f"Delta: {risk.delta(option):.4f}")      # ≈ option.Delta()
+print(f"Gamma: {risk.gamma(option):.6f}")      # ≈ option.Gamma()
+print(f"Vega:  {risk.vega(option):.4f}")       # ≈ option.Vega()
+print(f"Theta: {risk.theta(option):.4f}")      # ≈ option.Theta()
+print(f"Rho:   {risk.rho(option):.4f}")        # ≈ option.Rho()
+
+# Bond risk metrics
+bond = Bond()
+bond.FaceValue.set(1000.0)
+bond.CouponRate.set(0.05)
+bond.YieldToMaturity.set(0.04)
+bond.Maturity.set(10.0)
+
+print(f"DV01: ${risk.dv01(bond):.2f}")         # Dollar value of 1bp yield change
+
+# General sensitivity to any input
+sens = risk.sensitivity(option, "Spot", "Price", bump=0.01)
+```
+
+#### Portfolio Risk
+
+```python
+from lattice.trading import TradingSystem
+from lattice import risk
+
+system = TradingSystem()
+desk = system.book("OPTIONS_DESK")
+client = system.book("CLIENT")
+
+system.trade(desk, client, "AAPL_C_150", 100, 5.25)
+system.trade(desk, client, "GOOGL_C_140", 50, 8.00)
+system.set_market_price("AAPL_C_150", 5.50)
+system.set_market_price("GOOGL_C_140", 7.50)
+
+# Portfolio-level risk
+print(f"Portfolio Delta: {risk.portfolio_delta(desk):.2f}")
+
+# Portfolio exposure breakdown
+exposure = risk.portfolio_exposure(desk)
+print(f"Gross Exposure: ${exposure['gross_exposure']:,.2f}")
+print(f"Long positions: {exposure['num_long']}")
+```
+
+#### Stress Testing
+
+```python
+# Apply stress scenarios to a portfolio
+result = risk.stress(desk, spot_shock=-0.10, vol_shock=0.20)
+print(f"Base P&L:     ${result['base_pnl']:,.2f}")
+print(f"Stressed P&L: ${result['stressed_pnl']:,.2f}")
+print(f"P&L Impact:   ${result['pnl_impact']:,.2f}")
+
+# Run predefined scenarios
+crash_result = risk.run_scenario(desk, "market_crash")  # -20% spot, +50% vol
+hike_result = risk.run_scenario(desk, "rate_hike")      # +1% rates
+
+# Run all predefined scenarios at once
+all_results = risk.run_all_scenarios(desk)
+for scenario, result in all_results.items():
+    print(f"{scenario}: ${result['pnl_impact']:+,.2f}")
+
+# Add custom scenarios
+risk.add_scenario("my_stress", spot_shock=-0.15, vol_shock=0.30)
+```
+
+#### Value at Risk (VaR)
+
+```python
+# Parametric VaR using variance-covariance method
+var_result = risk.parametric_var(desk, confidence=0.95, holding_period=1)
+print(f"1-day 95% VaR: ${var_result['var']:,.2f}")
+print(f"Expected Shortfall: ${var_result['expected_shortfall']:,.2f}")
+
+# 10-day VaR for regulatory purposes
+var_10d = risk.parametric_var(desk, confidence=0.99, holding_period=10)
+print(f"10-day 99% VaR: ${var_10d['var']:,.2f}")
+
+# VaR contribution by position
+contributions = risk.var_contribution(desk)
+for symbol, contrib in contributions.items():
+    print(f"{symbol}: ${contrib:,.2f}")
+
+# Full VaR report with matrix of confidence/holding period combinations
+report = risk.var_report(desk)
+```
+
+#### RiskEngine for Batch Operations
+
+```python
+from lattice.risk import RiskEngine
+
+engine = RiskEngine()
+
+# Register multiple instruments
+engine.add(option, "AAPL_C_150")
+engine.add(bond, "UST_10Y")
+
+# Compute all applicable Greeks at once
+greeks = engine.compute_greeks()
+# {'AAPL_C_150': {'delta': 0.53, 'gamma': 0.02, 'vega': 0.38, ...},
+#  'UST_10Y': {'dv01': 85.23}}
+
+# Stress test all instruments
+results = engine.stress_test(Spot=-0.10)  # -10% spot shock
+for name, impact in results.items():
+    print(f"{name}: ${impact['price_impact']:,.2f}")
+```
+
 ## Examples
 
 Run the interactive option pricer:
@@ -272,12 +397,14 @@ python examples/quick_start.py
                          Your Code
     option.Spot.set(105) --> option.Price() --> Delta, Gamma...
     system.trade(...)    --> book.TotalPnL() --> Positions, P&L...
+    risk.delta(option)   --> risk.stress(book) --> VaR, Scenarios...
                               |
                               v
     +-----------------------------------------------------------+
     |                       Lattice                             |
     |  Instruments: VanillaOption | Stock | Bond | FX | Forward |
     |  Trading:     Book | Trade | Position | TradingSystem     |
+    |  Risk:        sensitivity | Greeks | stress | VaR         |
     |  Tables:      PositionTable | TradeBlotter                |
     |  UI:          DagApp | show() | Dashboards                |
     +-----------------------------------------------------------+
@@ -334,17 +461,85 @@ python examples/quick_start.py
 | `positions.show()` | Interactive position table dashboard |
 | `system.show()` | Trading system dashboard with all books |
 
-### Greeks
+### Greeks (Closed-Form)
 
-All Greeks are computed using Black-Scholes closed-form solutions:
+Black-Scholes closed-form solutions on `VanillaOption`:
 
 | Greek | Method | Description |
 |-------|--------|-------------|
 | Delta | `option.Delta()` | Rate of change of price w.r.t. spot |
 | Gamma | `option.Gamma()` | Rate of change of delta w.r.t. spot |
-| Vega | `option.Vega()` | Sensitivity to volatility |
-| Theta | `option.Theta()` | Time decay (per year) |
-| Rho | `option.Rho()` | Sensitivity to interest rate |
+| Vega | `option.Vega()` | Sensitivity to volatility (per 1% move) |
+| Theta | `option.Theta()` | Time decay (per day) |
+| Rho | `option.Rho()` | Sensitivity to interest rate (per 1% move) |
+
+### Risk (Numerical Sensitivities)
+
+General-purpose bump-and-reval functions that work for any instrument:
+
+| Function | Description |
+|----------|-------------|
+| `risk.sensitivity(inst, input, output, bump)` | General sensitivity of any output to any input |
+| `risk.delta(inst)` | dPrice/dSpot via bump-and-reval |
+| `risk.gamma(inst)` | d²Price/dSpot² via central difference |
+| `risk.vega(inst)` | Price change per 1% volatility move |
+| `risk.theta(inst)` | Price change per day (time decay) |
+| `risk.rho(inst)` | Price change per 1% rate move |
+| `risk.dv01(bond)` | Dollar value of 1 basis point yield change |
+
+### Risk (Portfolio)
+
+Portfolio-level risk functions:
+
+| Function | Description |
+|----------|-------------|
+| `risk.portfolio_delta(book)` | Aggregate delta exposure for a book |
+| `risk.portfolio_exposure(book)` | Exposure breakdown (gross, long, short) |
+| `risk.stress(book, spot_shock, vol_shock, rate_shock)` | Apply stress scenario, return P&L impact |
+
+### Risk (Scenarios)
+
+Predefined and custom stress scenarios:
+
+| Function | Description |
+|----------|-------------|
+| `risk.run_scenario(book, name)` | Run a predefined scenario (e.g., "market_crash") |
+| `risk.run_all_scenarios(book)` | Run all predefined scenarios |
+| `risk.list_scenarios()` | List available scenarios with parameters |
+| `risk.add_scenario(name, **shocks)` | Add a custom scenario |
+| `risk.remove_scenario(name)` | Remove a custom scenario |
+
+**Predefined Scenarios:**
+- `market_crash` - 20% spot drop, 50% vol spike
+- `rate_hike` - 1% rate increase
+- `rate_cut` - 1% rate decrease
+- `vol_spike` - 10% volatility increase
+- `vol_crush` - 10% volatility decrease
+- `flight_to_quality` - 10% spot drop, 0.5% rate decrease
+- `risk_on` - 5% spot rally, 5% vol decrease
+- `stagflation` - 5% spot drop, 2% rate increase
+
+### Risk (VaR)
+
+Value at Risk calculations using variance-covariance method:
+
+| Function | Description |
+|----------|-------------|
+| `risk.parametric_var(book, confidence, holding_period)` | Compute VaR and Expected Shortfall |
+| `risk.var_contribution(book)` | VaR contribution by position |
+| `risk.var_report(book)` | Full VaR report with multiple confidence/period combinations |
+
+### Risk (RiskEngine)
+
+Batch operations across multiple instruments:
+
+| Method | Description |
+|--------|-------------|
+| `engine.add(inst, name)` | Register an instrument |
+| `engine.remove(name)` | Remove an instrument |
+| `engine.clear()` | Remove all instruments |
+| `engine.compute_greeks()` | Compute all applicable Greeks for registered instruments |
+| `engine.stress_test(**shocks)` | Apply stress scenario to all instruments |
 
 ## License
 
