@@ -7,25 +7,23 @@ Built on [dag](https://github.com/beeblebroxz/dag) (computation graphs) and [liv
 <!-- Screenshot placeholder - replace with actual screenshot -->
 <!-- ![Lattice Option Pricer](docs/images/option-pricer-screenshot.png) -->
 
+> **Try it:** `python examples/option_pricer_web.py` then open http://localhost:8080
+
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                 Black-Scholes Option Pricer                  │
-├─────────────────────────────────────────────────────────────┤
-│  Market Data                                                 │
-│    Spot Price:     $105.00  [────────●────]                 │
-│    Strike Price:   $100.00  [────────●────]                 │
-│                                                              │
-│  Model Parameters                                            │
-│    Volatility:     25.00%   [────●────────]                 │
-│    Risk-Free Rate: 5.00%    [──●──────────]                 │
-│    Time to Expiry: 1.00 yr  [────────●────]                 │
-│                                                              │
-│  ─────────────────────────────────────────────────────────  │
-│                                                              │
-│  Option Price      $12.3456                                  │
-│  Delta             0.6368      Gamma    0.0181              │
-│  Vega              37.5241     Theta   -6.4140              │
-└─────────────────────────────────────────────────────────────┘
++-------------------------------------------------------------+
+|              Black-Scholes Option Pricer                    |
++-------------------------------------------------------------+
+|  INPUTS                                                     |
+|    Spot Price:     $105.00                                  |
+|    Strike Price:   $100.00                                  |
+|    Volatility:     25.00%                                   |
+|    Risk-Free Rate: 5.00%                                    |
+|    Time to Expiry: 1.00 yr                                  |
++-------------------------------------------------------------+
+|  RESULTS                                                    |
+|    Price   $12.3456    Delta   0.6368    Gamma   0.0181    |
+|    Vega    37.5241     Theta  -6.4140    Rho    45.1893    |
++-------------------------------------------------------------+
 ```
 
 ## Highlights
@@ -195,20 +193,20 @@ python examples/quick_start.py
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        Your Code                             │
-│   option.Spot.set(105) → option.Price() → Delta, Gamma...   │
-└─────────────────────────────┬───────────────────────────────┘
-                              │
-┌─────────────────────────────▼───────────────────────────────┐
-│                         Lattice                              │
-│  VanillaOption │ PositionTable │ TradeBlotter │ Web UI      │
-└────────┬────────────────┬───────────────────────────────────┘
-         │                │
-    ┌────▼────┐      ┌────▼────┐
-    │   dag   │      │livetable│
-    │  graphs │      │  tables │
-    └─────────┘      └─────────┘
+                         Your Code
+    option.Spot.set(105) --> option.Price() --> Delta, Gamma...
+                              |
+                              v
+    +-----------------------------------------------------------+
+    |                       Lattice                             |
+    |   VanillaOption | PositionTable | TradeBlotter | Web UI   |
+    +-----------------------------------------------------------+
+              |                          |
+              v                          v
+         +----------+              +------------+
+         |   dag    |              |  livetable |
+         |  graphs  |              |   tables   |
+         +----------+              +------------+
 ```
 
 **dag** - Computation graphs with automatic dependency tracking, memoization, and scenarios. When you change `Spot`, only the dependent values (`Price`, `Delta`, etc.) are recomputed.
