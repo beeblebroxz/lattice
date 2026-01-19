@@ -135,6 +135,64 @@ class PositionTable:
         return list(self._symbol_to_row.keys())
 
 
+    def show(self, port: int = 8080, open_browser: bool = True) -> None:
+        """
+        Display the position table in a web browser.
+
+        Args:
+            port: Server port (default 8080)
+            open_browser: Whether to open browser automatically
+
+        Example:
+            positions = PositionTable()
+            positions.add("AAPL_C_150", quantity=10, avg_price=5.50)
+            positions.show()  # Opens browser with position table
+        """
+        from .table_ui import run_table_ui
+
+        columns = [
+            {"key": "symbol", "label": "Symbol"},
+            {"key": "quantity", "label": "Quantity", "format": "quantity"},
+            {"key": "avg_price", "label": "Avg Price", "format": "currency"},
+            {"key": "market_value", "label": "Market Value", "format": "currency"},
+            {"key": "unrealized_pnl", "label": "Unrealized P&L", "format": "pnl"},
+        ]
+
+        def get_rows():
+            return [
+                {
+                    "symbol": p["symbol"],
+                    "quantity": p["quantity"],
+                    "avg_price": p["avg_price"],
+                    "market_value": p["market_value"],
+                    "unrealized_pnl": p["unrealized_pnl"],
+                }
+                for p in self
+            ]
+
+        def get_stats():
+            long_count = sum(1 for p in self if p["quantity"] > 0)
+            short_count = sum(1 for p in self if p["quantity"] < 0)
+            total_mv = sum(p["market_value"] or 0 for p in self)
+            total_pnl = sum(p["unrealized_pnl"] or 0 for p in self)
+            return {
+                "positions": len(self),
+                "long": long_count,
+                "short": short_count,
+                "market_value": f"${total_mv:,.2f}",
+                "total_pnl": f"${total_pnl:+,.2f}",
+            }
+
+        run_table_ui(
+            title="Position Table",
+            columns=columns,
+            get_rows=get_rows,
+            get_stats=get_stats,
+            port=port,
+            open_browser=open_browser,
+        )
+
+
 class PositionTableView:
     """Read-only view of filtered positions."""
 

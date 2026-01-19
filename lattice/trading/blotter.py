@@ -122,6 +122,63 @@ class TradeBlotter:
         return total
 
 
+    def show(self, port: int = 8080, open_browser: bool = True) -> None:
+        """
+        Display the trade blotter in a web browser.
+
+        Args:
+            port: Server port (default 8080)
+            open_browser: Whether to open browser automatically
+
+        Example:
+            blotter = TradeBlotter()
+            blotter.record("AAPL_C_150", "BUY", 10, 5.25)
+            blotter.show()  # Opens browser with trade table
+        """
+        from .table_ui import run_table_ui
+
+        columns = [
+            {"key": "trade_id", "label": "ID"},
+            {"key": "timestamp", "label": "Time"},
+            {"key": "symbol", "label": "Symbol"},
+            {"key": "side", "label": "Side", "format": "side"},
+            {"key": "quantity", "label": "Qty", "format": "number"},
+            {"key": "price", "label": "Price", "format": "currency"},
+            {"key": "notional", "label": "Notional", "format": "currency"},
+        ]
+
+        def get_rows():
+            return [
+                {
+                    "trade_id": t["trade_id"],
+                    "timestamp": t["timestamp"],
+                    "symbol": t["symbol"],
+                    "side": t["side"],
+                    "quantity": t["quantity"],
+                    "price": t["price"],
+                    "notional": t["notional"],
+                }
+                for t in self
+            ]
+
+        def get_stats():
+            return {
+                "total_trades": len(self),
+                "total_notional": f"${self.total_notional:,.2f}",
+                "buys": len(self.buys()),
+                "sells": len(self.sells()),
+            }
+
+        run_table_ui(
+            title="Trade Blotter",
+            columns=columns,
+            get_rows=get_rows,
+            get_stats=get_stats,
+            port=port,
+            open_browser=open_browser,
+        )
+
+
 class TradeBlotterView:
     """Read-only view of filtered trades."""
 
