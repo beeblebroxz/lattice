@@ -14,19 +14,30 @@ scenario = dag.scenario
 flush = dag.flush
 reset = dag.reset
 
-from .instruments import VanillaOption
-from .trading import PositionTable, TradeBlotter
+from .instruments import VanillaOption, Stock, Bond, Forward, Future, FXPair, FXForward
+from .trading import PositionTable, TradeBlotter, TradingDashboard
 
 __all__ = [
     # Core functions
     "scenario",
     "flush",
     "reset",
-    # Instruments
+    # Instruments - Options
     "VanillaOption",
+    # Instruments - Equity
+    "Stock",
+    # Instruments - Fixed Income
+    "Bond",
+    # Instruments - Derivatives
+    "Forward",
+    "Future",
+    # Instruments - FX
+    "FXPair",
+    "FXForward",
     # Trading
     "PositionTable",
     "TradeBlotter",
+    "TradingDashboard",
 ]
 
 __version__ = "0.1.0"
