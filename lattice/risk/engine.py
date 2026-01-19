@@ -196,3 +196,96 @@ class RiskEngine:
             "count": len(self._instruments),
             "instruments": list(self._instruments.keys()),
         }
+
+    async def compute_greeks_distributed(
+        self,
+        bump: float = 0.01,
+        store_uri: Optional[str] = None,
+        temporal_host: str = "localhost:7233",
+        task_queue: str = "lattice-risk",
+    ) -> Dict[str, Dict[str, float]]:
+        """Compute Greeks using Temporal for parallel, durable execution.
+
+        This method provides the same results as compute_greeks() but uses
+        Temporal workflows to execute calculations in parallel across workers.
+
+        Benefits:
+        - Parallel execution across instruments
+        - Automatic retries on numerical errors
+        - Progress tracking via Temporal UI
+        - Durability - can resume after worker restart
+
+        Requirements:
+        - Temporal server must be running
+        - A worker must be started: python -m lattice.workflows.worker
+
+        Args:
+            bump: Bump size for numerical differentiation
+            store_uri: Store connection string (if instruments are persisted)
+            temporal_host: Temporal server address
+            task_queue: Task queue name
+
+        Returns:
+            dict mapping instrument name to dict of Greeks
+
+        Example:
+            import asyncio
+
+            engine = RiskEngine()
+            engine.add(option1, "AAPL_C_150")
+            engine.add(option2, "AAPL_P_145")
+
+            # Sequential (existing method)
+            seq_results = engine.compute_greeks()
+
+            # Parallel via Temporal
+            dist_results = asyncio.run(engine.compute_greeks_distributed())
+        """
+        from lattice.workflows import compute_greeks_async
+
+        results = await compute_greeks_async(
+            instruments=self._instruments,
+            bump=bump,
+            store_uri=store_uri,
+            temporal_host=temporal_host,
+            task_queue=task_queue,
+        )
+
+        output = {}
+        for name, result in results.items():
+            output[name] = {}
+            for key in ["delta", "gamma", "vega", "theta", "rho", "dv01"]:
+                if key in result and result[key] is not None:
+                    output[name][key] = result[key]
+
+        return output
+
+    async def stress_test_distributed(
+        self,
+        temporal_host: str = "localhost:7233",
+        task_queue: str = "lattice-risk",
+        store_uri: Optional[str] = None,
+        **shocks,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Apply stress scenario using Temporal for parallel execution.
+
+        Same as stress_test() but uses Temporal workflows.
+
+        Args:
+            temporal_host: Temporal server address
+            task_queue: Task queue name
+            store_uri: Store connection string
+            **shocks: Relative shocks by input name
+
+        Returns:
+            dict mapping instrument name to stress result dict
+        """
+        from lattice.workflows import stress_test_async
+
+        return await stress_test_async(
+            instruments=self._instruments,
+            shocks=shocks,
+            store_uri=store_uri,
+            temporal_host=temporal_host,
+            task_queue=task_queue,
+        )
