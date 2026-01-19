@@ -46,22 +46,22 @@ class VanillaOption(Instrument):
         """Current underlying price."""
         return 100.0
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Input | dag.Overridable)
     def Volatility(self) -> float:
         """Implied volatility (annualized, as decimal e.g., 0.20 = 20%)."""
         return 0.20
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Input | dag.Overridable)
     def Rate(self) -> float:
         """Risk-free interest rate (annualized, as decimal)."""
         return 0.05
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Input | dag.Overridable)
     def Dividend(self) -> float:
         """Continuous dividend yield (annualized, as decimal)."""
         return 0.0
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Input | dag.Overridable)
     def TimeToExpiry(self) -> float:
         """Time to expiration in years."""
         return 1.0
