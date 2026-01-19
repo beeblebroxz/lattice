@@ -39,6 +39,7 @@ dependencies = [
     "dag-framework>=0.1.0",
     "livetable>=0.1.0",
     "numpy>=1.20",
+    "aiohttp>=3.8",
 ]
 
 [project.urls]

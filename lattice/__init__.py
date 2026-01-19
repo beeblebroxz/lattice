@@ -2,6 +2,9 @@
 Lattice - Quant pricing and trading library.
 
 Built on dag (computation graphs) and livetable (fast tables).
+
+Submodules:
+    lattice.ui - Reactive web UI framework (DagApp, show, bind)
 """
 
 import dag
