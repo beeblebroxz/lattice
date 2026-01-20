@@ -3,7 +3,7 @@
 import pytest
 import math
 import dag
-from lattice import Stock, Bond, Forward, Future, FXPair, FXForward
+from lattice import Stock, Bond, InterestRateSwap, Forward, Future, FXPair, FXForward
 
 
 @pytest.fixture(autouse=True)
@@ -413,3 +413,185 @@ class TestFXForward:
         fwd = FXForward()
         fwd.IsLongBase.set(False)
         assert fwd.Delta() < 0
+
+
+class TestInterestRateSwap:
+    """Tests for InterestRateSwap instrument."""
+
+    def test_default_values(self):
+        """Test default parameter values."""
+        swap = InterestRateSwap()
+        assert swap.Notional() == 1_000_000.0
+        assert swap.FixedRate() == 0.03
+        assert swap.Maturity() == 5.0
+        assert swap.Frequency() == 4
+        assert swap.IsPayer() is True
+
+    def test_par_swap_zero_npv(self):
+        """A swap at par rate should have zero NPV."""
+        swap = InterestRateSwap()
+        swap.Notional.set(10_000_000.0)
+        swap.Maturity.set(5.0)
+        swap.DiscountRate.set(0.04)
+
+        # Set fixed rate to par rate
+        par_rate = swap.ParSwapRate()
+        swap.FixedRate.set(par_rate)
+
+        assert abs(swap.NPV()) < 1.0  # Within $1
+
+    def test_payer_swap_gains_when_rates_rise(self):
+        """Payer swap should gain value when rates rise."""
+        swap = InterestRateSwap()
+        swap.IsPayer.set(True)
+        swap.FixedRate.set(0.03)
+        swap.DiscountRate.set(0.03)
+
+        npv_base = swap.NPV()
+
+        swap.DiscountRate.set(0.04)  # Rates rise
+        npv_up = swap.NPV()
+
+        assert npv_up > npv_base
+
+    def test_receiver_swap_gains_when_rates_fall(self):
+        """Receiver swap should gain value when rates fall."""
+        swap = InterestRateSwap()
+        swap.IsPayer.set(False)
+        swap.FixedRate.set(0.03)
+        swap.DiscountRate.set(0.03)
+
+        npv_base = swap.NPV()
+
+        swap.DiscountRate.set(0.02)  # Rates fall
+        npv_down = swap.NPV()
+
+        assert npv_down > npv_base
+
+    def test_dv01_positive(self):
+        """DV01 should always be positive."""
+        swap = InterestRateSwap()
+        assert swap.DV01() > 0
+
+    def test_dv01_increases_with_maturity(self):
+        """Longer swaps have higher DV01."""
+        swap_short = InterestRateSwap()
+        swap_short.Maturity.set(2.0)
+
+        swap_long = InterestRateSwap()
+        swap_long.Maturity.set(10.0)
+
+        assert swap_long.DV01() > swap_short.DV01()
+
+    def test_dv01_scales_with_notional(self):
+        """DV01 should scale linearly with notional."""
+        swap1 = InterestRateSwap()
+        swap1.Notional.set(1_000_000.0)
+
+        swap2 = InterestRateSwap()
+        swap2.Notional.set(2_000_000.0)
+
+        assert abs(swap2.DV01() / swap1.DV01() - 2.0) < 0.01
+
+    def test_annuity_positive(self):
+        """Annuity factor should be positive."""
+        swap = InterestRateSwap()
+        assert swap.Annuity() > 0
+
+    def test_par_rate_close_to_discount_rate(self):
+        """Par swap rate should be close to the discount rate."""
+        swap = InterestRateSwap()
+        swap.DiscountRate.set(0.04)
+
+        par_rate = swap.ParSwapRate()
+        # Par rate should be close to the discount rate
+        assert abs(par_rate - 0.04) < 0.005
+
+    def test_payer_vs_receiver_opposite_npv(self):
+        """Payer and receiver swaps should have opposite NPVs."""
+        swap_payer = InterestRateSwap()
+        swap_payer.IsPayer.set(True)
+        swap_payer.FixedRate.set(0.04)
+        swap_payer.DiscountRate.set(0.03)
+
+        swap_receiver = InterestRateSwap()
+        swap_receiver.IsPayer.set(False)
+        swap_receiver.FixedRate.set(0.04)
+        swap_receiver.DiscountRate.set(0.03)
+
+        assert abs(swap_payer.NPV() + swap_receiver.NPV()) < 1.0
+
+    def test_scenario_override_reverts(self):
+        """Scenario overrides should revert after context."""
+        swap = InterestRateSwap()
+        swap.DiscountRate.set(0.03)
+
+        original_npv = swap.NPV()
+
+        with dag.scenario():
+            swap.DiscountRate.override(0.05)
+            _ = swap.NPV()  # Different value inside scenario
+
+        assert swap.NPV() == original_npv
+
+    def test_summary_format(self):
+        """Summary should follow expected format."""
+        swap = InterestRateSwap()
+        swap.FixedRate.set(0.035)
+        swap.Maturity.set(7.0)
+        swap.IsPayer.set(True)
+
+        summary = swap.Summary()
+        assert "3.50%" in summary
+        assert "7Y" in summary
+        assert "Payer" in summary
+
+    def test_market_value_equals_npv(self):
+        """MarketValue should equal NPV."""
+        swap = InterestRateSwap()
+        assert swap.MarketValue() == swap.NPV()
+
+    def test_price_equals_npv(self):
+        """Price should equal NPV (risk module compatibility)."""
+        swap = InterestRateSwap()
+        assert swap.Price() == swap.NPV()
+
+    def test_yield_to_maturity_alias(self):
+        """YieldToMaturity should return DiscountRate (for risk module)."""
+        swap = InterestRateSwap()
+        swap.DiscountRate.set(0.045)
+        assert swap.YieldToMaturity() == swap.DiscountRate()
+
+    def test_fixed_leg_pv_calculation(self):
+        """Fixed leg PV should equal fixed payment times annuity."""
+        swap = InterestRateSwap()
+        swap.Notional.set(1_000_000.0)
+        swap.FixedRate.set(0.04)
+        swap.Frequency.set(4)
+
+        expected = swap.FixedPayment() * swap.Annuity()
+        assert abs(swap.FixedLegPV() - expected) < 0.01
+
+    def test_floating_leg_pv_calculation(self):
+        """Floating leg PV = Notional * (1 - DF_n) at reset."""
+        swap = InterestRateSwap()
+        swap.Notional.set(5_000_000.0)
+        swap.Maturity.set(5.0)
+        swap.Frequency.set(4)
+        swap.DiscountRate.set(0.04)
+
+        # Calculate expected: Notional * (1 - DF_n)
+        r = swap.DiscountRate() / swap.Frequency()  # periodic rate
+        n = int(swap.Maturity() * swap.Frequency())  # num periods
+        df_n = 1 / ((1 + r) ** n)
+        expected = swap.Notional() * (1 - df_n)
+
+        assert abs(swap.FloatingLegPV() - expected) < 0.01
+
+    def test_num_periods(self):
+        """Number of periods should be maturity times frequency."""
+        swap = InterestRateSwap()
+        swap.Maturity.set(5.0)
+        swap.Frequency.set(4)
+
+        assert swap.NumPeriods() == 20

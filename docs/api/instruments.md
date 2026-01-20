@@ -118,6 +118,56 @@ print(f"Convexity: {bond.Convexity():.2f}")
 | `ModifiedDuration()` | Duration / (1 + yield/freq) |
 | `Convexity()` | Second derivative of price |
 
+## InterestRateSwap
+
+Vanilla interest rate swap (fixed-for-floating) with valuation and risk metrics.
+
+```python
+from lattice import InterestRateSwap
+
+swap = InterestRateSwap()
+swap.Notional.set(10_000_000.0)    # $10M notional
+swap.FixedRate.set(0.03)           # 3% fixed rate
+swap.Maturity.set(5.0)             # 5 years
+swap.Frequency.set(4)              # Quarterly payments
+swap.IsPayer.set(True)             # Pay fixed, receive floating
+swap.DiscountRate.set(0.035)       # Discount rate
+
+print(f"NPV: ${swap.NPV():,.2f}")
+print(f"Par Swap Rate: {swap.ParSwapRate()*100:.2f}%")
+print(f"DV01: ${swap.DV01():,.2f}")
+```
+
+### Contract Terms (Persisted)
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `Notional` | float | 1,000,000 | Notional principal (not exchanged) |
+| `FixedRate` | float | 0.03 | Fixed leg rate (3%) |
+| `Maturity` | float | 5.0 | Years to maturity |
+| `Frequency` | int | 4 | Payments per year (4=quarterly) |
+| `IsPayer` | bool | True | Pay fixed / receive floating |
+
+### Market Data (Input | Overridable)
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `FloatingRate` | float | 0.025 | Current floating rate |
+| `DiscountRate` | float | 0.03 | Discount rate for PV |
+| `FloatingSpread` | float | 0.0 | Spread over float index |
+
+### Outputs
+
+| Field | Description |
+|-------|-------------|
+| `NPV()` | Net present value of swap |
+| `FixedLegPV()` | Present value of fixed leg |
+| `FloatingLegPV()` | Present value of floating leg |
+| `ParSwapRate()` | Fixed rate for zero NPV |
+| `DV01()` | Dollar value of 1bp rate move |
+| `PV01()` | NPV change per 1bp fixed rate change |
+| `Annuity()` | Sum of discount factors |
+
 ## Forward
 
 Forward contract with cost-of-carry pricing.

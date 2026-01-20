@@ -9,7 +9,7 @@ Built on [dag](https://github.com/beeblebroxz/dag) (computation graphs) and [liv
 ## Highlights
 
 - **Reactive Pricing** - Change an input, all dependent values update automatically
-- **Multi-Asset Support** - Options, stocks, bonds, forwards, futures, FX
+- **Multi-Asset Support** - Options, stocks, bonds, swaps, forwards, futures, FX
 - **Trading Books** - Full position management with P&L tracking
 - **Risk Analysis** - Bump-and-reval Greeks, stress testing, VaR calculations
 - **Persistent Storage** - Path-based object database with SQLite backend
@@ -57,11 +57,12 @@ show(option)  # Opens browser
 ### Instruments
 
 ```python
-from lattice import VanillaOption, Stock, Bond, Forward, FXPair
+from lattice import VanillaOption, Stock, Bond, InterestRateSwap, Forward, FXPair
 
 option = VanillaOption()
 stock = Stock()
 bond = Bond()
+swap = InterestRateSwap()
 forward = Forward()
 fx = FXPair()
 ```
@@ -141,7 +142,7 @@ print(f"Base: ${option.Price():.4f}")
 
 ### API Reference
 
-- [Instruments](docs/api/instruments.md) - VanillaOption, Stock, Bond, FX, etc.
+- [Instruments](docs/api/instruments.md) - VanillaOption, Stock, Bond, Swap, FX, etc.
 - [Trading](docs/api/trading.md) - TradingSystem, Book, Trade, Position
 - [Risk](docs/api/risk.md) - Greeks, stress testing, VaR
 - [Store](docs/api/store.md) - Persistent storage API
@@ -160,6 +161,7 @@ python examples/greeks_deep_dive.py        # Analytic vs numerical Greeks
 python examples/multi_instrument_risk.py   # Risk across asset classes
 python examples/sensitivity_analysis.py    # Bump-and-reval methodology
 python examples/bond_risk_analysis.py      # Fixed income risk deep dive
+python examples/swap_risk_analysis.py      # Interest rate swap risk
 
 # Trading examples
 python examples/trading_demo.py            # Trading system basics

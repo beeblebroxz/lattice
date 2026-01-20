@@ -85,6 +85,7 @@ lattice/
 │   ├── multi_instrument_risk.py  # Risk across asset classes (Options, Bonds, Forwards, FX)
 │   ├── sensitivity_analysis.py   # Bump-and-reval methodology deep dive
 │   ├── bond_risk_analysis.py     # Fixed income risk (Duration, Convexity, DV01)
+│   ├── swap_risk_analysis.py     # Interest rate swap valuation and hedging
 │   ├── trading_demo.py           # Trading system demo
 │   └── trading_dashboard.py      # Full dashboard
 └── tests/

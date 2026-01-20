@@ -16,7 +16,7 @@ scenario = dag.scenario
 flush = dag.flush
 reset = dag.reset
 
-from .instruments import VanillaOption, Stock, Bond, Forward, Future, FXPair, FXForward
+from .instruments import VanillaOption, Stock, Bond, InterestRateSwap, Forward, Future, FXPair, FXForward
 from .trading import PositionTable, TradeBlotter, TradingDashboard, Book, Trade, Position, TradingSystem
 from . import risk
 from . import store
@@ -35,6 +35,7 @@ __all__ = [
     "Stock",
     # Instruments - Fixed Income
     "Bond",
+    "InterestRateSwap",
     # Instruments - Derivatives
     "Forward",
     "Future",
