@@ -185,3 +185,16 @@ class VanillaOption(Instrument):
             time_to_expiry=self.TimeToExpiry(),
             is_call=self.IsCall(),
         )
+
+    # ==================== Instrument Interface ====================
+
+    @dag.computed
+    def Summary(self) -> str:
+        """Summary of key option parameters: K={strike} S={spot} {C/P}."""
+        option_type = "C" if self.IsCall() else "P"
+        return f"K={self.Strike():.0f} S={self.Spot():.0f} {option_type}"
+
+    @dag.computed
+    def MarketValue(self) -> float:
+        """Market value of the option (same as Price)."""
+        return self.Price()

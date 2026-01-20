@@ -201,6 +201,18 @@ class Forward(Instrument):
         # Simplified approximation:
         return -T * value * 0.01
 
+    # ==================== Instrument Interface ====================
+
+    @dag.computed
+    def Summary(self) -> str:
+        """Summary of key forward parameters: S={spot} F={forward}."""
+        return f"S={self.Spot():.0f} F={self.ForwardPrice():.2f}"
+
+    @dag.computed
+    def MarketValue(self) -> float:
+        """Market value of the forward contract."""
+        return self.Value()
+
 
 class Future(Forward):
     """

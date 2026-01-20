@@ -154,6 +154,16 @@ python examples/option_pricer_web.py
 
 # Quick demo
 python examples/quick_start.py
+
+# Risk and Greeks examples
+python examples/greeks_deep_dive.py        # Analytic vs numerical Greeks
+python examples/multi_instrument_risk.py   # Risk across asset classes
+python examples/sensitivity_analysis.py    # Bump-and-reval methodology
+python examples/bond_risk_analysis.py      # Fixed income risk deep dive
+
+# Trading examples
+python examples/trading_demo.py            # Trading system basics
+python examples/trading_dashboard.py       # Full trading dashboard
 ```
 
 ## Architecture

@@ -81,6 +81,10 @@ lattice/
 ├── examples/
 │   ├── option_pricer_web.py      # Interactive option pricer
 │   ├── quick_start.py            # Basic demo
+│   ├── greeks_deep_dive.py       # Analytic vs numerical Greeks comparison
+│   ├── multi_instrument_risk.py  # Risk across asset classes (Options, Bonds, Forwards, FX)
+│   ├── sensitivity_analysis.py   # Bump-and-reval methodology deep dive
+│   ├── bond_risk_analysis.py     # Fixed income risk (Duration, Convexity, DV01)
 │   ├── trading_demo.py           # Trading system demo
 │   └── trading_dashboard.py      # Full dashboard
 └── tests/
@@ -115,12 +119,13 @@ lattice/
 
 ### dag.Model for Instruments
 
-All instruments inherit from `dag.Model` with reactive computed functions:
+All instruments inherit from `Instrument` (which inherits from `dag.Model`) with reactive computed functions:
 
 ```python
 import dag
+from lattice.instruments.base import Instrument
 
-class VanillaOption(dag.Model):
+class VanillaOption(Instrument):
     @dag.computed(dag.Input)
     def Strike(self):
         return 100.0
@@ -133,6 +138,31 @@ class VanillaOption(dag.Model):
     def Price(self):
         # Dependencies tracked automatically
         return black_scholes_price(self.Spot(), self.Strike(), ...)
+
+    # Polymorphic interface (override base class)
+    @dag.computed
+    def Summary(self):
+        return f"K={self.Strike():.0f} S={self.Spot():.0f}"
+
+    @dag.computed
+    def MarketValue(self):
+        return self.Price()
+```
+
+### Instrument Interface
+
+All instruments implement a common polymorphic interface:
+
+| Method | Description | Example Output |
+|--------|-------------|----------------|
+| `Summary()` | Human-readable description | `"K=100 S=105 C"`, `"5% 10Y"` |
+| `MarketValue()` | Current market value | Option price, bond price, forward value |
+
+This allows generic portfolio code without type-checking:
+
+```python
+for name, inst in portfolio.items():
+    print(f"{name}: {inst.Summary()} = ${inst.MarketValue():,.2f}")
 ```
 
 ### dag Flags

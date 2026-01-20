@@ -252,3 +252,15 @@ class FXForward(FXPair):
 
         df = math.exp(-r_base * T)
         return notional * df * sign
+
+    # ==================== Instrument Interface ====================
+
+    @dag.computed
+    def Summary(self) -> str:
+        """Summary of key FX forward parameters: {pair} @ {rate}."""
+        return f"{self.PairName()} @ {self.ContractRate():.4f}"
+
+    @dag.computed
+    def MarketValue(self) -> float:
+        """Market value of the FX forward contract."""
+        return self.Value()

@@ -236,6 +236,25 @@ loaded = db["/Instruments/AAPL_C_150"]
 print(loaded.Strike())  # 150.0
 ```
 
+## Example Scripts
+
+Explore the `examples/` directory for comprehensive demonstrations:
+
+```bash
+# Greeks and Risk
+python examples/greeks_deep_dive.py        # Analytic vs numerical Greeks
+python examples/multi_instrument_risk.py   # Risk across Options, Bonds, Forwards, FX
+python examples/sensitivity_analysis.py    # Bump-and-reval methodology
+python examples/bond_risk_analysis.py      # Fixed income: Duration, Convexity, DV01
+
+# Trading
+python examples/trading_demo.py            # Trading system basics
+python examples/trading_dashboard.py       # Full interactive dashboard
+
+# Interactive
+python examples/option_pricer_web.py       # Web-based option pricer
+```
+
 ## Next Steps
 
 - [Instruments API](../api/instruments.md) - Full instrument reference

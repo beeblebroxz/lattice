@@ -264,6 +264,41 @@ print(f"Value: ${fwd.Value():,.2f}")
 | `ForwardPoints()` | Forward - Spot |
 | `Value()` | Current contract value |
 
+## Common Interface
+
+All instruments inherit from `Instrument` and implement a polymorphic interface:
+
+| Method | Description |
+|--------|-------------|
+| `Summary()` | Human-readable summary of key parameters |
+| `MarketValue()` | Current market value of the instrument |
+
+This enables generic portfolio code without type-checking:
+
+```python
+from lattice import VanillaOption, Bond, Forward
+from lattice.instruments.fx import FXForward
+
+portfolio = {
+    "AAPL_C_155": VanillaOption(),
+    "UST_10Y": Bond(),
+    "GOLD_FWD": Forward(),
+    "EURUSD_FWD": FXForward(),
+}
+
+# Generic iteration - no isinstance() needed
+for name, inst in portfolio.items():
+    print(f"{name}: {inst.Summary()} = ${inst.MarketValue():,.2f}")
+```
+
+**Output examples:**
+| Instrument | `Summary()` | `MarketValue()` |
+|------------|-------------|-----------------|
+| VanillaOption | `"K=155 S=150 C"` | Option price |
+| Bond | `"5% 10Y"` | Bond price |
+| Forward | `"S=1900 F=1952.98"` | Contract value |
+| FXForward | `"EUR/USD @ 1.0950"` | MTM value |
+
 ## Common Patterns
 
 ### Reactivity

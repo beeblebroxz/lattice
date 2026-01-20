@@ -211,3 +211,15 @@ class Bond(Instrument):
         # Percentage change
         pct_change = -md * dy + 0.5 * conv * (dy ** 2)
         return pct_change * self.Price()
+
+    # ==================== Instrument Interface ====================
+
+    @dag.computed
+    def Summary(self) -> str:
+        """Summary of key bond parameters: {coupon}% {maturity}Y."""
+        return f"{self.CouponRate()*100:.0f}% {self.Maturity():.0f}Y"
+
+    @dag.computed
+    def MarketValue(self) -> float:
+        """Market value of the bond (same as Price)."""
+        return self.Price()

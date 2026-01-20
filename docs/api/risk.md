@@ -284,3 +284,21 @@ print("\n=== VaR Contributions ===")
 for symbol, contrib in risk.var_contribution(desk).items():
     print(f"  {symbol}: ${contrib:,.2f}")
 ```
+
+## Example Scripts
+
+See the `examples/` directory for comprehensive risk demonstrations:
+
+| Script | Description |
+|--------|-------------|
+| `greeks_deep_dive.py` | Compare analytic vs numerical Greeks, bump size sensitivity |
+| `multi_instrument_risk.py` | Risk across Options, Bonds, Forwards, FX with RiskEngine |
+| `sensitivity_analysis.py` | Manual bump-and-reval, forward vs central difference, sensitivity ladders |
+| `bond_risk_analysis.py` | Duration, convexity, DV01 analysis with hedging examples |
+
+```bash
+python examples/greeks_deep_dive.py
+python examples/multi_instrument_risk.py
+python examples/sensitivity_analysis.py
+python examples/bond_risk_analysis.py
+```
