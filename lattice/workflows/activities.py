@@ -16,11 +16,14 @@ Example:
     )
 """
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Type
 
 import dag
 from dag.flags import Flags
+
+logger = logging.getLogger(__name__)
 
 try:
     from temporalio import activity
@@ -113,8 +116,8 @@ def serialize_instrument(inst: dag.Model) -> Dict[str, Any]:
                     data[name] = list(value)
                 elif isinstance(value, dict):
                     data[name] = dict(value)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Skipping field %s during serialization: %s", name, e)
     return data
 
 

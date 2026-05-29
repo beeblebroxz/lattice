@@ -91,6 +91,11 @@ class RiskEngine:
         Automatically detects which Greeks are applicable based on
         the instrument's available inputs.
 
+        Computed sequentially: bump-and-reval runs inside dag.scenario(), and
+        dag scenarios are single-threaded (see dag.ConcurrentScenarioError), so
+        parallelizing this across in-process threads is unsafe. Use
+        compute_greeks_distributed() for parallel, multi-process execution.
+
         Args:
             bump: Bump size for numerical differentiation
 

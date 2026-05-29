@@ -3,6 +3,7 @@
 import pytest
 import math
 import logging
+import threading
 import dag
 from lattice import VanillaOption, Bond, Stock, Forward, risk
 from lattice.trading import TradingSystem
@@ -543,3 +544,37 @@ class TestScenarioReversion:
         final_prices = [p.MarketPrice() for p in desk.Positions()]
 
         assert original_prices == final_prices
+
+
+class TestScenarioThreadSafety:
+    """dag scenarios are single-threaded; this guards lattice's reliance on it.
+
+    Risk calculations are bump-and-reval inside dag.scenario(). dag forbids
+    using the graph from another thread while a scenario is active, so batch
+    risk must be parallelized across processes (the Temporal path), never
+    in-process threads. This regression test fails loudly if that dag
+    guarantee ever changes.
+    """
+
+    def test_cross_thread_scenario_raises(self):
+        option = VanillaOption()
+        option.Spot.set(100.0)
+        option.Strike.set(100.0)
+
+        captured = {}
+
+        def worker():
+            try:
+                with dag.scenario():
+                    option.Spot.override(110.0)
+                    option.Price()
+            except Exception as e:  # noqa: BLE001 - we assert the type below
+                captured["exc"] = e
+
+        with dag.scenario():
+            option.Spot.override(105.0)
+            thread = threading.Thread(target=worker)
+            thread.start()
+            thread.join()
+
+        assert isinstance(captured.get("exc"), dag.ConcurrentScenarioError)

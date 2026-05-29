@@ -198,6 +198,19 @@ class TestSession:
         session.unsubscribe("option.Price")
         assert "option.Price" not in session.subscribed_paths
 
+    def test_invalidation_propagates_on_flush(self):
+        """Changing an upstream input marks subscribed dependents as invalidated."""
+        session = Session()
+        session.subscribe("option.Price", self.option.Price, self.option)
+        # Evaluate once to establish the dependency edge and cache.
+        session.get_value("option.Price")
+
+        # Change an input Price depends on, then dispatch dag notifications.
+        self.option.Spot.set(self.option.Spot() + 10.0)
+        dag.flush()
+
+        assert "option.Price" in session.flush_invalidations()
+
     def test_get_all_values(self):
         session = Session()
         session.subscribe("option.Strike", self.option.Strike, self.option)

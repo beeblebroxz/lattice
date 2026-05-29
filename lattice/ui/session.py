@@ -66,8 +66,9 @@ class Session:
             format_spec=format_spec,
         )
 
-        # Set up watch callback
-        def on_invalidation():
+        # Set up watch callback. dag dispatches notifications as callback(node);
+        # we key off node_path from the closure and ignore the node argument.
+        def on_invalidation(_node=None):
             self._pending_invalidations.add(node_path)
             if self._on_invalidation:
                 self._on_invalidation({node_path})
