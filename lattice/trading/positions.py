@@ -50,28 +50,20 @@ class PositionTable:
             market_value: Current market value (optional)
             unrealized_pnl: Unrealized P&L (optional)
         """
+        row = {
+            "symbol": symbol,
+            "quantity": quantity,
+            "avg_price": avg_price,
+            "market_value": market_value,
+            "unrealized_pnl": unrealized_pnl,
+        }
         if symbol in self._symbol_to_row:
-            # Update existing position by deleting and re-adding
-            # (workaround for livetable int type inference issue)
+            # Update the existing row in place, preserving its position.
             row_idx = self._symbol_to_row[symbol]
-            self._table.delete_row(row_idx)
-            self._table.append_row({
-                "symbol": symbol,
-                "quantity": quantity,
-                "avg_price": avg_price,
-                "market_value": market_value,
-                "unrealized_pnl": unrealized_pnl,
-            })
-            self._rebuild_index()
+            for col, value in row.items():
+                self._table.set_value(row_idx, col, value)
         else:
-            # Add new position
-            self._table.append_row({
-                "symbol": symbol,
-                "quantity": quantity,
-                "avg_price": avg_price,
-                "market_value": market_value,
-                "unrealized_pnl": unrealized_pnl,
-            })
+            self._table.append_row(row)
             self._symbol_to_row[symbol] = len(self._table) - 1
 
     def get(self, symbol: str) -> Optional[dict]:

@@ -38,6 +38,22 @@ class TestPositionTable:
         assert pos["quantity"] == 15
         assert pos["avg_price"] == pytest.approx(5.75)
 
+    def test_update_position_preserves_order(self):
+        """Updating a position edits it in place, keeping iteration order stable."""
+        positions = PositionTable()
+        positions.add("AAPL_C_150", quantity=10, avg_price=5.50)
+        positions.add("AAPL_P_145", quantity=-5, avg_price=3.20)
+        positions.add("GOOGL_C_140", quantity=20, avg_price=8.00)
+
+        # Update the first position; it should stay first, not jump to the end.
+        positions.add("AAPL_C_150", quantity=99, avg_price=6.00)
+
+        symbols = [pos["symbol"] for pos in positions]
+        assert symbols == ["AAPL_C_150", "AAPL_P_145", "GOOGL_C_140"]
+        assert positions.get("AAPL_C_150")["quantity"] == 99
+        # Other positions remain intact after the in-place update.
+        assert positions.get("GOOGL_C_140")["quantity"] == 20
+
     def test_multiple_positions(self):
         positions = PositionTable()
         positions.add("AAPL_C_150", quantity=10, avg_price=5.50)
