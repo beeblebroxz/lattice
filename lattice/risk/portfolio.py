@@ -49,35 +49,35 @@ def portfolio_delta(book: "Book", bump: float = 0.01) -> float:
     return (bumped_pnl - base_pnl) / bump
 
 
-def stress(
-    book: "Book",
-    spot_shock: float = 0.0,
-    rate_shock: float = 0.0,
-    vol_shock: float = 0.0,
-) -> dict:
-    """Apply stress scenario to a book and return P&L impact.
+def stress(book: "Book", spot_shock: float = 0.0) -> dict:
+    """Apply a price stress to a book and return P&L impact.
 
-    Shocks are applied as relative changes (e.g., -0.10 = -10%).
+    A book's P&L is a linear function of its positions' market prices
+    (``Σ Quantity × MarketPrice``), so the only risk factor a book carries is
+    price. ``spot_shock`` is applied as a relative change to each position's
+    ``MarketPrice`` (e.g. ``-0.10`` = -10%).
+
+    Volatility and rate sensitivity do not exist at the book level (positions
+    hold only a market price). To stress vol or rates, stress the underlying
+    instruments instead via ``RiskEngine.stress_test``.
 
     Args:
         book: Book with positions to analyze
-        spot_shock: Relative change in spot/market prices (e.g., -0.10 for -10%)
-        rate_shock: Absolute change in rates (e.g., 0.01 for +1%)
-        vol_shock: Absolute change in volatility (e.g., 0.05 for +5%)
+        spot_shock: Relative change in position market prices (e.g., -0.10 for -10%)
 
     Returns:
-        dict with base_pnl, stressed_pnl, pnl_impact, and applied shocks
+        dict with base_pnl, stressed_pnl, pnl_impact, and spot_shock
 
     Example:
-        # Market crash: -20% spot, +50% vol
-        result = stress(book, spot_shock=-0.20, vol_shock=0.50)
+        # 20% sell-off
+        result = stress(book, spot_shock=-0.20)
         print(f"P&L impact: ${result['pnl_impact']:,.2f}")
     """
     base_pnl = book.TotalPnL()
 
     with dag.scenario():
-        for pos in book.Positions():
-            if spot_shock:
+        if spot_shock:
+            for pos in book.Positions():
                 current_price = pos.MarketPrice()
                 pos.MarketPrice.override(current_price * (1 + spot_shock))
 
@@ -88,8 +88,6 @@ def stress(
         "stressed_pnl": stressed_pnl,
         "pnl_impact": stressed_pnl - base_pnl,
         "spot_shock": spot_shock,
-        "rate_shock": rate_shock,
-        "vol_shock": vol_shock,
     }
 
 

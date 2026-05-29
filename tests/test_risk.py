@@ -2,10 +2,23 @@
 
 import pytest
 import math
+import logging
 import dag
 from lattice import VanillaOption, Bond, Stock, Forward, risk
 from lattice.trading import TradingSystem
 from lattice.risk import RiskEngine
+
+
+class _BrokenInstrument(dag.Model):
+    """Instrument whose Price raises, to exercise error handling."""
+
+    @dag.computed(dag.Input | dag.Overridable)
+    def Spot(self) -> float:
+        return 100.0
+
+    @dag.computed
+    def Price(self) -> float:
+        raise ValueError("boom")
 
 
 @pytest.fixture(autouse=True)
@@ -226,6 +239,15 @@ class TestPortfolioRisk:
         assert exposure["num_long"] == 2
         assert exposure["num_short"] == 0
 
+    def test_stress_rejects_unsupported_shocks(self, trading_system):
+        """A book has no vol/rate sensitivity; those shocks are not accepted."""
+        system, desk = trading_system
+
+        with pytest.raises(TypeError):
+            risk.stress(desk, vol_shock=0.5)
+        with pytest.raises(TypeError):
+            risk.stress(desk, rate_shock=0.01)
+
 
 class TestScenarios:
     """Tests for predefined stress scenarios."""
@@ -287,6 +309,28 @@ class TestScenarios:
 
         # Cleanup
         risk.remove_scenario("my_scenario")
+
+    def test_run_scenario_reports_applied_and_skipped(self, trading_system):
+        """A multi-factor scenario applies the price leg and reports the rest as skipped."""
+        system, desk = trading_system
+
+        result = risk.run_scenario(desk, "market_crash")
+
+        # market_crash = {spot_shock: -0.20, vol_shock: 0.50}
+        assert result["applied_shocks"] == {"spot_shock": -0.20}
+        assert result["skipped_shocks"] == {"vol_shock": 0.50}
+        assert result["pnl_impact"] < 0  # the -20% spot leg moves the book
+
+    def test_run_scenario_rate_only_is_zero_and_transparent(self, trading_system):
+        """A rate-only scenario has no effect on a book, reported explicitly (not silently)."""
+        system, desk = trading_system
+
+        result = risk.run_scenario(desk, "rate_hike")
+
+        # rate_hike = {rate_shock: 0.01}; a book has no rate sensitivity
+        assert result["applied_shocks"] == {}
+        assert result["skipped_shocks"] == {"rate_shock": 0.01}
+        assert result["pnl_impact"] == 0.0
 
 
 class TestVaR:
@@ -425,6 +469,19 @@ class TestRiskEngine:
         # Should have DV01 but not delta/vega
         assert "dv01" in greeks["UST_10Y"]
         assert "delta" not in greeks["UST_10Y"]
+
+    def test_compute_greeks_logs_on_failure(self, caplog):
+        """A genuine computation error is logged, not silently swallowed."""
+        engine = RiskEngine()
+        engine.add(_BrokenInstrument(), "BROKEN")
+
+        with caplog.at_level(logging.WARNING):
+            greeks = engine.compute_greeks()
+
+        # No greek could be computed (Price raises)...
+        assert greeks["BROKEN"] == {}
+        # ...but the failure is visible in the logs, naming the instrument.
+        assert "BROKEN" in caplog.text
 
     def test_engine_remove_instrument(self):
         """Engine should allow removing instruments."""

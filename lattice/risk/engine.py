@@ -18,10 +18,13 @@ Example:
     print(stress["AAPL_C_150"])
 """
 
+import logging
 from typing import Dict, Any, Optional
 import dag
 
 from .sensitivities import delta, gamma, vega, theta, rho, dv01
+
+logger = logging.getLogger(__name__)
 
 
 class RiskEngine:
@@ -104,36 +107,36 @@ class RiskEngine:
                 try:
                     results[name]["delta"] = delta(inst, bump)
                     results[name]["gamma"] = gamma(inst, bump)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed to compute delta/gamma for %s: %s", name, e)
 
             # Vega (requires Volatility)
             if hasattr(inst, "Volatility") and hasattr(inst, "Price"):
                 try:
                     results[name]["vega"] = vega(inst, bump)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed to compute vega for %s: %s", name, e)
 
             # Theta (requires TimeToExpiry)
             if hasattr(inst, "TimeToExpiry") and hasattr(inst, "Price"):
                 try:
                     results[name]["theta"] = theta(inst)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed to compute theta for %s: %s", name, e)
 
             # Rho (requires Rate)
             if hasattr(inst, "Rate") and hasattr(inst, "Price"):
                 try:
                     results[name]["rho"] = rho(inst, bump)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed to compute rho for %s: %s", name, e)
 
             # DV01 (requires YieldToMaturity)
             if hasattr(inst, "YieldToMaturity") and hasattr(inst, "Price"):
                 try:
                     results[name]["dv01"] = dv01(inst)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed to compute dv01 for %s: %s", name, e)
 
         return results
 

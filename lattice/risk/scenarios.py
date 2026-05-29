@@ -77,15 +77,27 @@ SCENARIOS: Dict[str, Dict[str, float]] = {
 }
 
 
+# Shock factors a book can actually absorb. A book's P&L depends only on
+# position market prices, so only the price (spot) leg of a scenario applies;
+# vol/rate legs are meaningful at the instrument level, not the book level.
+_BOOK_APPLICABLE_SHOCKS = ("spot_shock",)
+
+
 def run_scenario(book: "Book", scenario_name: str) -> Dict[str, Any]:
     """Run a predefined stress scenario on a book.
+
+    Predefined scenarios may include spot, vol, and rate legs, but a book only
+    has price sensitivity. The price leg is applied; any vol/rate legs are
+    reported under ``skipped_shocks`` rather than silently dropped, so a
+    rate-only scenario visibly produces zero book impact.
 
     Args:
         book: Book with positions to analyze
         scenario_name: Name of scenario from SCENARIOS dict
 
     Returns:
-        dict with base_pnl, stressed_pnl, pnl_impact, and scenario name
+        dict with base_pnl, stressed_pnl, pnl_impact, scenario name, and the
+        ``applied_shocks`` / ``skipped_shocks`` breakdown
 
     Raises:
         KeyError: If scenario_name not found
@@ -95,8 +107,13 @@ def run_scenario(book: "Book", scenario_name: str) -> Dict[str, Any]:
         raise KeyError(f"Unknown scenario '{scenario_name}'. Available: {available}")
 
     params = SCENARIOS[scenario_name]
-    result = stress(book, **params)
+    applied = {k: v for k, v in params.items() if k in _BOOK_APPLICABLE_SHOCKS}
+    skipped = {k: v for k, v in params.items() if k not in _BOOK_APPLICABLE_SHOCKS}
+
+    result = stress(book, **applied)
     result["scenario"] = scenario_name
+    result["applied_shocks"] = applied
+    result["skipped_shocks"] = skipped
     return result
 
 
