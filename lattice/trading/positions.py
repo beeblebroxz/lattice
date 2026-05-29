@@ -126,6 +126,16 @@ class PositionTable:
         """Get all position symbols."""
         return list(self._symbol_to_row.keys())
 
+    @property
+    def total_market_value(self) -> float:
+        """Sum of position market values (unset values count as 0)."""
+        return self._table.sum("market_value")
+
+    @property
+    def total_unrealized_pnl(self) -> float:
+        """Sum of unrealized P&L across positions (unset values count as 0)."""
+        return self._table.sum("unrealized_pnl")
+
 
     def show(self, port: int = 8080, open_browser: bool = True) -> None:
         """
@@ -165,8 +175,8 @@ class PositionTable:
         def get_stats():
             long_count = sum(1 for p in self if p["quantity"] > 0)
             short_count = sum(1 for p in self if p["quantity"] < 0)
-            total_mv = sum(p["market_value"] or 0 for p in self)
-            total_pnl = sum(p["unrealized_pnl"] or 0 for p in self)
+            total_mv = self.total_market_value
+            total_pnl = self.total_unrealized_pnl
             return {
                 "positions": len(self),
                 "long": long_count,

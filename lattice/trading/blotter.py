@@ -116,10 +116,7 @@ class TradeBlotter:
     @property
     def total_notional(self) -> float:
         """Total notional value of all trades."""
-        total = 0.0
-        for i in range(len(self._table)):
-            total += self._table.get_value(i, "notional")
-        return total
+        return self._table.sum("notional")
 
 
     def show(self, port: int = 8080, open_browser: bool = True) -> None:

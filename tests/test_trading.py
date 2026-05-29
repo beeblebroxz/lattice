@@ -102,6 +102,21 @@ class TestPositionTable:
         pos = positions[0]
         assert pos["symbol"] == "AAPL_C_150"
 
+    def test_total_market_value_and_pnl(self):
+        positions = PositionTable()
+        positions.add("A", quantity=10, avg_price=5.0, market_value=60.0, unrealized_pnl=10.0)
+        positions.add("B", quantity=-5, avg_price=3.0, market_value=-20.0, unrealized_pnl=-5.0)
+        assert positions.total_market_value == pytest.approx(40.0)
+        assert positions.total_unrealized_pnl == pytest.approx(5.0)
+
+    def test_totals_treat_unset_as_zero(self):
+        positions = PositionTable()
+        assert positions.total_market_value == 0.0
+        assert positions.total_unrealized_pnl == 0.0
+        # market_value / unrealized_pnl default to None when unset.
+        positions.add("A", quantity=10, avg_price=5.0)
+        assert positions.total_market_value == 0.0
+
 
 class TestTradeBlotter:
     """Test TradeBlotter."""
@@ -178,3 +193,6 @@ class TestTradeBlotter:
         blotter.record("GOOGL_C_140", "BUY", 5, 10.00)  # 50
 
         assert blotter.total_notional == pytest.approx(100.0)
+
+    def test_total_notional_empty(self):
+        assert TradeBlotter().total_notional == 0.0
