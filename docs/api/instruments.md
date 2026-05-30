@@ -48,19 +48,20 @@ print(f"Delta: {option.Delta():.4f}")
 
 ## Stock
 
-Equity with price, dividend, and market metrics.
+Equity with spot, dividend yield, and forward/carry metrics.
 
 ```python
 from lattice import Stock
 
 stock = Stock()
 stock.Symbol.set("AAPL")
-stock.Price.set(150.0)
-stock.Dividend.set(0.96)
-stock.SharesOutstanding.set(15_000_000_000)
+stock.Spot.set(150.0)
+stock.DividendYield.set(0.012)   # continuous yield
+stock.Rate.set(0.05)
+stock.TimeToExpiry.set(1.0)
 
-print(f"Yield: {stock.DividendYield():.2%}")
-print(f"Market Cap: ${stock.MarketCap():,.0f}")
+print(f"Forward: ${stock.ForwardPrice():.2f}")
+print(f"Cost of carry: ${stock.CarryCost():.2f}")
 ```
 
 ### Inputs
@@ -68,16 +69,20 @@ print(f"Market Cap: ${stock.MarketCap():,.0f}")
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `Symbol` | str | "" | Ticker symbol |
-| `Price` | float | 0.0 | Current price |
-| `Dividend` | float | 0.0 | Annual dividend |
-| `SharesOutstanding` | float | 0.0 | Shares outstanding |
+| `Spot` | float | 100.0 | Current stock price |
+| `DividendYield` | float | 0.0 | Continuous dividend yield |
+| `Rate` | float | 0.05 | Risk-free interest rate |
+| `TimeToExpiry` | float | 1.0 | Time horizon in years |
 
 ### Outputs
 
 | Field | Description |
 |-------|-------------|
-| `DividendYield()` | Dividend / Price |
-| `MarketCap()` | Price * SharesOutstanding |
+| `ForwardPrice()` | F = S·e^((r−q)·T) |
+| `DividendPV()` | PV of dividends over the horizon |
+| `CarryCost()` | Forward minus spot (financing − dividends) |
+| `DiscountFactor()` | e^(−r·T) |
+| `PresentValue()` | PV of receiving the stock at expiry |
 
 ## Bond
 
@@ -90,7 +95,7 @@ bond = Bond()
 bond.FaceValue.set(1000.0)
 bond.CouponRate.set(0.05)
 bond.YieldToMaturity.set(0.04)
-bond.MaturityYears.set(10)
+bond.Maturity.set(10)
 bond.Frequency.set(2)  # Semi-annual
 
 print(f"Price: ${bond.Price():.2f}")
@@ -105,7 +110,7 @@ print(f"Convexity: {bond.Convexity():.2f}")
 | `FaceValue` | float | 1000.0 | Par value |
 | `CouponRate` | float | 0.05 | Annual coupon rate |
 | `YieldToMaturity` | float | 0.05 | YTM |
-| `MaturityYears` | float | 10.0 | Years to maturity |
+| `Maturity` | float | 10.0 | Years to maturity |
 | `Frequency` | int | 2 | Payments per year |
 
 ### Outputs
@@ -252,7 +257,7 @@ eurusd.BaseRate.set(0.04)
 eurusd.QuoteRate.set(0.05)
 
 print(f"EUR/USD: {eurusd.Spot():.4f}")
-print(f"1Y Forward: {eurusd.Forward(1.0):.4f}")
+print(f"Forward: {eurusd.ForwardRate():.4f}")
 ```
 
 ### Inputs
@@ -269,8 +274,9 @@ print(f"1Y Forward: {eurusd.Forward(1.0):.4f}")
 
 | Field | Description |
 |-------|-------------|
-| `Forward(T)` | Forward rate for tenor T |
-| `ForwardPoints(T)` | Forward points for tenor T |
+| `ForwardRate()` | Forward rate (uses `TimeToExpiry`) |
+| `ForwardPoints()` | Forward points |
+| `ForwardValue()` | Value of the forward position |
 
 ## FXForward
 

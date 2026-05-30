@@ -121,16 +121,16 @@ from lattice import Stock, Bond, Forward, FXPair
 # Stock
 stock = Stock()
 stock.Symbol.set("AAPL")
-stock.Price.set(150.0)
-stock.Dividend.set(0.96)
-print(f"Dividend Yield: {stock.DividendYield():.2%}")
+stock.Spot.set(150.0)
+stock.DividendYield.set(0.012)
+print(f"Forward Price: ${stock.ForwardPrice():.2f}")
 
 # Bond
 bond = Bond()
 bond.FaceValue.set(1000.0)
 bond.CouponRate.set(0.05)
 bond.YieldToMaturity.set(0.04)
-bond.MaturityYears.set(10)
+bond.Maturity.set(10)
 print(f"Bond Price: ${bond.Price():.2f}")
 print(f"Duration: {bond.Duration():.2f} years")
 
@@ -146,7 +146,7 @@ eurusd = FXPair()
 eurusd.Spot.set(1.0850)
 eurusd.BaseRate.set(0.04)
 eurusd.QuoteRate.set(0.05)
-print(f"1Y Forward: {eurusd.Forward(1.0):.4f}")
+print(f"Forward: {eurusd.ForwardRate():.4f}")
 ```
 
 ## Position Tracking

@@ -88,24 +88,26 @@ Apply market shocks and measure P&L impact.
 
 ```python
 # Basic stress test
-result = risk.stress(desk, spot_shock=-0.10, vol_shock=0.20)
+result = risk.stress(desk, spot_shock=-0.10)
 print(f"Base P&L: ${result['base_pnl']:,.2f}")
 print(f"Stressed P&L: ${result['stressed_pnl']:,.2f}")
 print(f"P&L Impact: ${result['pnl_impact']:,.2f}")
 ```
 
-### `risk.stress(book, **shocks)`
+### `risk.stress(book, spot_shock=0.0)`
 
-Apply custom shocks to a portfolio.
+Apply a price shock to a book and measure the P&L impact.
 
 **Shock Parameters:**
 | Parameter | Description |
 |-----------|-------------|
-| `spot_shock` | Relative spot change (-0.10 = -10%) |
-| `vol_shock` | Absolute vol change (0.05 = +5 vol points) |
-| `rate_shock` | Absolute rate change (0.01 = +1%) |
+| `spot_shock` | Relative change to position market prices (-0.10 = -10%) |
 
-**Returns:** Dict with `base_pnl`, `stressed_pnl`, `pnl_impact`
+**Returns:** Dict with `base_pnl`, `stressed_pnl`, `pnl_impact`, `spot_shock`
+
+> **Note:** A book's P&L is a linear function of its positions' market prices, so
+> the only risk factor a book carries is price. To stress volatility or rates,
+> shock the underlying instruments with `RiskEngine.stress_test(**shocks)` instead.
 
 ## Predefined Scenarios
 
@@ -124,18 +126,39 @@ for name, params in risk.list_scenarios().items():
     print(f"{name}: {params}")
 ```
 
+Scenarios may include spot, vol, and rate legs, but a book only has price
+sensitivity (see the note under `risk.stress`). `run_scenario` applies the
+price leg and reports the rest transparently rather than silently dropping it:
+
+```python
+result = risk.run_scenario(desk, "rate_hike")  # rate-only scenario
+result["applied_shocks"]   # {} — nothing a book can absorb
+result["skipped_shocks"]   # {"rate_shock": 0.01}
+result["pnl_impact"]       # 0.0, and you can see why
+
+result = risk.run_scenario(desk, "market_crash")
+result["applied_shocks"]   # {"spot_shock": -0.20}
+result["skipped_shocks"]   # {"vol_shock": 0.50}
+```
+
+**Returns:** Dict with `base_pnl`, `stressed_pnl`, `pnl_impact`, `spot_shock`,
+`scenario`, `applied_shocks`, `skipped_shocks`.
+
 ### Available Scenarios
 
-| Scenario | Description |
-|----------|-------------|
+| Scenario | Shocks |
+|----------|--------|
 | `market_crash` | -20% spot, +50% vol |
-| `rate_hike` | +1% rates |
-| `rate_cut` | -1% rates |
+| `market_correction` | -10% spot, +25% vol |
+| `market_rally` | +10% spot, -10% vol |
+| `rate_hike` | +100bp rates |
+| `rate_cut` | -100bp rates |
+| `rate_shock_severe` | +200bp rates |
 | `vol_spike` | +10% vol |
-| `vol_crush` | -10% vol |
-| `flight_to_quality` | -10% spot, -0.5% rates |
-| `risk_on` | +5% spot, -5% vol |
-| `stagflation` | -5% spot, +2% rates |
+| `vol_crush` | -5% vol |
+| `flight_to_quality` | -10% spot, -50bp rates |
+| `stagflation` | -15% spot, +150bp rates, +30% vol |
+| `black_swan` | -40% spot, +100% vol |
 
 ### Custom Scenarios
 
@@ -237,6 +260,14 @@ for name, impact in results.items():
 | `clear()` | Remove all instruments |
 | `compute_greeks()` | Compute all applicable Greeks |
 | `stress_test(**shocks)` | Apply stress to all instruments |
+| `compute_greeks_distributed()` | Greeks in parallel across Temporal workers (async) |
+| `stress_test_distributed(**shocks)` | Stress in parallel across Temporal workers (async) |
+
+> **Threading:** `compute_greeks()` runs sequentially because bump-and-reval
+> uses `dag.scenario()`, and dag scenarios are single-threaded — sharing the
+> graph across threads raises `dag.ConcurrentScenarioError`. For parallelism,
+> use the `*_distributed` methods, which fan out across Temporal worker
+> *processes* (requires `pip install lattice[temporal]` and a running worker).
 
 ## Example: Full Risk Workflow
 

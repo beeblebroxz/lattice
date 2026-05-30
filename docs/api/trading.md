@@ -39,8 +39,8 @@ print(f"Desk P&L: ${desk.TotalPnL():.2f}")
 
 | Property | Description |
 |----------|-------------|
-| `Books()` | Dict of all books |
-| `Trades()` | List of all trades |
+| `books` | List of all books |
+| `trades` | List of all trades |
 
 ## Book
 
@@ -81,7 +81,7 @@ A transaction between two books.
 system.trade(buyer=desk, seller=client, symbol="AAPL_C_150", quantity=10, price=5.25)
 
 # Access trade details
-for trade in system.Trades():
+for trade in system.trades:
     print(f"{trade.Symbol()}: {trade.Quantity()} @ ${trade.Price():.2f}")
 ```
 
@@ -144,17 +144,21 @@ long_positions = positions.filter(lambda r: r["quantity"] > 0)
 short_positions = positions.filter(lambda r: r["quantity"] < 0)
 
 # Access by symbol
-aapl = positions["AAPL_C_150"]
+aapl = positions.get("AAPL_C_150")
 print(f"AAPL qty: {aapl['quantity']}")
+
+# Indexing is positional (by row), not by symbol
+first = positions[0]
 ```
 
 ### Methods
 
 | Method | Description |
 |--------|-------------|
-| `add(symbol, quantity, avg_price)` | Add or update a position |
-| `get(symbol)` | Get position by symbol |
-| `filter(predicate)` | Create filtered view |
+| `add(symbol, quantity, avg_price)` | Add or update a position (in place) |
+| `get(symbol)` | Get position by symbol (or `None`) |
+| `remove(symbol)` | Remove a position by symbol |
+| `filter(predicate)` | Create a filtered view |
 | `show()` | Open interactive dashboard |
 
 ### Properties
@@ -162,8 +166,8 @@ print(f"AAPL qty: {aapl['quantity']}")
 | Property | Description |
 |----------|-------------|
 | `symbols` | List of all symbols |
-| `long()` | Filter to long positions |
-| `short()` | Filter to short positions |
+| `total_market_value` | Sum of position market values |
+| `total_unrealized_pnl` | Sum of unrealized P&L across positions |
 
 ## TradeBlotter
 
@@ -180,12 +184,12 @@ blotter.record("AAPL_C_150", "BUY", 5, 5.75)
 blotter.record("AAPL_P_145", "SELL", 5, 3.20)
 
 # Analysis
-print(f"Total notional: ${blotter.total_notional():,.2f}")
+print(f"Total notional: ${blotter.total_notional:,.2f}")  # property
 print(f"Buy trades: {len(blotter.buys())}")
 print(f"Sell trades: {len(blotter.sells())}")
 
 # Filter by symbol
-aapl_trades = blotter.filter_by_symbol("AAPL_C_150")
+aapl_trades = blotter.by_symbol("AAPL_C_150")
 
 # Show dashboard
 blotter.show()
@@ -196,11 +200,16 @@ blotter.show()
 | Method | Description |
 |--------|-------------|
 | `record(symbol, side, quantity, price)` | Record a trade |
-| `filter_by_symbol(symbol)` | Filter trades by symbol |
+| `by_symbol(symbol)` | Filter trades by symbol |
 | `buys()` | Filter to buy trades |
 | `sells()` | Filter to sell trades |
-| `total_notional()` | Sum of quantity * price |
-| `show()` | Open interactive dashboard |
+| `filter(predicate)` | Create a filtered view |
+
+### Properties
+
+| Property | Description |
+|----------|-------------|
+| `total_notional` | Sum of quantity × price across all trades |
 
 ## Example: Full Trading Workflow
 
