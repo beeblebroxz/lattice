@@ -94,20 +94,20 @@ print(f"Stressed P&L: ${result['stressed_pnl']:,.2f}")
 print(f"P&L Impact: ${result['pnl_impact']:,.2f}")
 ```
 
-### `risk.stress(book, spot_shock=0.0)`
+### `risk.stress(book, spot_shock=0.0, vol_shock=0.0, rate_shock=0.0)`
 
-Apply a price shock to a book and measure the P&L impact.
+Apply spot/vol/rate shocks to a book and measure the P&L impact.
 
-**Shock Parameters:**
-| Parameter | Description |
-|-----------|-------------|
-| `spot_shock` | Relative change to position market prices (-0.10 = -10%) |
+For positions linked to a live instrument, the shocks override the instrument's
+`Spot`/`Volatility`/`Rate` and the book reprices reactively. For price-only
+positions, only `spot_shock` applies (to `MarketPrice`); vol/rate are reported
+under `skipped_shocks`.
 
-**Returns:** Dict with `base_pnl`, `stressed_pnl`, `pnl_impact`, `spot_shock`
+**Shock convention:** `spot_shock` and `vol_shock` are relative (`× (1+s)`);
+`rate_shock` is absolute (`+s`, i.e. basis points).
 
-> **Note:** A book's P&L is a linear function of its positions' market prices, so
-> the only risk factor a book carries is price. To stress volatility or rates,
-> shock the underlying instruments with `RiskEngine.stress_test(**shocks)` instead.
+**Returns:** Dict with `base_pnl`, `stressed_pnl`, `pnl_impact`, `spot_shock`,
+`vol_shock`, `rate_shock`, `applied_shocks`, `skipped_shocks`.
 
 ## Predefined Scenarios
 
@@ -126,19 +126,26 @@ for name, params in risk.list_scenarios().items():
     print(f"{name}: {params}")
 ```
 
-Scenarios may include spot, vol, and rate legs, but a book only has price
-sensitivity (see the note under `risk.stress`). `run_scenario` applies the
-price leg and reports the rest transparently rather than silently dropping it:
+Scenarios may include spot, vol, and rate legs. They are passed through to
+`risk.stress`: positions linked to a live instrument absorb all three (the
+instrument's factors are overridden and the book reprices), while price-only
+positions absorb only the spot leg. Any leg with nothing to act on is reported
+under `skipped_shocks` rather than silently dropped — so on a **price-only**
+book a rate-only scenario visibly produces zero impact:
 
 ```python
+# price-only book (positions marked via set_market_price, no linked instrument)
 result = risk.run_scenario(desk, "rate_hike")  # rate-only scenario
-result["applied_shocks"]   # {} — nothing a book can absorb
+result["applied_shocks"]   # {} — a price-only book can't absorb a rate move
 result["skipped_shocks"]   # {"rate_shock": 0.01}
 result["pnl_impact"]       # 0.0, and you can see why
 
 result = risk.run_scenario(desk, "market_crash")
 result["applied_shocks"]   # {"spot_shock": -0.20}
 result["skipped_shocks"]   # {"vol_shock": 0.50}
+
+# on an instrument-linked book, market_crash's vol leg applies too:
+#   applied_shocks == {"spot_shock": -0.20, "vol_shock": 0.50}, skipped == {}
 ```
 
 **Returns:** Dict with `base_pnl`, `stressed_pnl`, `pnl_impact`, `spot_shock`,
@@ -154,8 +161,8 @@ result["skipped_shocks"]   # {"vol_shock": 0.50}
 | `rate_hike` | +100bp rates |
 | `rate_cut` | -100bp rates |
 | `rate_shock_severe` | +200bp rates |
-| `vol_spike` | +10% vol |
-| `vol_crush` | -5% vol |
+| `vol_spike` | +50% vol |
+| `vol_crush` | -25% vol |
 | `flight_to_quality` | -10% spot, -50bp rates |
 | `stagflation` | -15% spot, +150bp rates, +30% vol |
 | `black_swan` | -40% spot, +100% vol |

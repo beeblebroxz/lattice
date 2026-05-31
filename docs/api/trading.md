@@ -33,6 +33,7 @@ print(f"Desk P&L: ${desk.TotalPnL():.2f}")
 | `trade(buyer, seller, symbol, quantity, price)` | Execute a trade between books |
 | `set_market_price(symbol, price)` | Set market price for P&L calculation |
 | `get_market_price(symbol)` | Get current market price |
+| `register_instrument(symbol, inst)` | Back a symbol with a live instrument (reactive pricing) |
 | `show()` | Open interactive dashboard |
 
 ### Properties
@@ -71,6 +72,7 @@ print(f"Total P&L: ${desk.TotalPnL():.2f}")
 | `Positions()` | List of Position objects |
 | `TotalPnL()` | Sum of all position P&L |
 | `TotalMarketValue()` | Sum of all position market values |
+| `Delta()` / `Vega()` / `Gamma()` | Portfolio Greeks (sum over instrument-linked positions) |
 
 ## Trade
 
@@ -168,6 +170,24 @@ first = positions[0]
 | `symbols` | List of all symbols |
 | `total_market_value` | Sum of position market values |
 | `total_unrealized_pnl` | Sum of unrealized P&L across positions |
+
+### Instrument-linked positions
+
+A position can derive its value from a live instrument instead of a static
+price. Register the instrument on the system; positions in that symbol reprice
+reactively as the instrument's inputs change:
+
+```python
+opt = VanillaOption(); opt.Spot.set(100.0); opt.Strike.set(100.0)
+system.register_instrument("AAPL_C_150", opt)
+system.trade(desk, client, "AAPL_C_150", 10, opt.MarketValue())
+
+opt.Spot.set(110.0)        # the position and book reprice automatically
+desk.Delta()               # portfolio delta from the linked instrument
+```
+
+For a linked symbol, drive the market through the instrument's inputs;
+`set_market_price` raises for linked symbols.
 
 ## TradeBlotter
 
