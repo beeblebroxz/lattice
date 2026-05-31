@@ -12,6 +12,9 @@ from .position import Position
 if TYPE_CHECKING:
     from .system import TradingSystem
 
+# Instrument input each Greek requires; positions whose instrument lacks it skip.
+_GREEK_REQUIRES = {"delta": "Spot", "vega": "Volatility", "gamma": "Spot"}
+
 
 class Book(dag.Model):
     """A book holding positions with aggregated P&L.
@@ -123,3 +126,38 @@ class Book(dag.Model):
     def ShortExposure(self) -> float:
         """Total market value of short positions (as positive number)."""
         return abs(sum(pos.MarketValue() for pos in self.Positions() if pos.IsShort()))
+
+    @dag.computed
+    def Delta(self) -> float:
+        """Aggregate delta: sum of quantity * instrument delta over linked positions."""
+        return self._book_greek("delta", self.Positions())
+
+    @dag.computed
+    def Vega(self) -> float:
+        """Aggregate vega across linked positions."""
+        return self._book_greek("vega", self.Positions())
+
+    @dag.computed
+    def Gamma(self) -> float:
+        """Aggregate gamma across linked positions."""
+        return self._book_greek("gamma", self.Positions())
+
+    def _book_greek(self, name: str, positions: List[Position]) -> float:
+        """Quantity-weighted sum of a numerical Greek over linked positions.
+
+        Positions with no linked instrument, or whose instrument lacks the
+        required input (e.g. a bond has no Spot), contribute nothing.
+        """
+        from lattice.risk import sensitivities
+
+        required = _GREEK_REQUIRES.get(name)
+        if required is None:
+            raise ValueError(f"Unknown greek: {name!r}")
+        fn = getattr(sensitivities, name)
+        total = 0.0
+        for pos in positions:
+            inst = pos.LinkedInstrument()
+            if inst is None or not hasattr(inst, required):
+                continue
+            total += pos.Quantity() * fn(inst)
+        return total

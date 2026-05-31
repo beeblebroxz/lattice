@@ -289,3 +289,38 @@ class TestInstrumentRegistry:
         sys.trade(desk, client, "AAPL", 100, 5.0)
         sys.set_market_price("AAPL", 6.0)                # unlinked symbol: fine
         assert sys.get_market_price("AAPL") == 6.0
+
+
+class TestPortfolioGreeks:
+    """Book.Delta/Vega/Gamma aggregate per-instrument sensitivities."""
+
+    def test_book_delta_aggregates_linked_positions(self):
+        import lattice.risk as risk
+        sys = TradingSystem(); desk = sys.book("D"); client = sys.book("C")
+        opt = VanillaOption()
+        opt.Spot.set(100.0); opt.Strike.set(100.0)
+        opt.Volatility.set(0.20); opt.Rate.set(0.04)
+        sys.register_instrument("OPT", opt)
+        sys.trade(desk, client, "OPT", 10, opt.MarketValue())
+        # All three Greeks are quantity-weighted sums of the instrument's Greek.
+        assert abs(desk.Delta() - 10 * risk.delta(opt)) < 1e-6
+        assert abs(desk.Vega() - 10 * risk.vega(opt)) < 1e-6
+        assert abs(desk.Gamma() - 10 * risk.gamma(opt)) < 1e-6
+
+    def test_unlinked_book_has_zero_greeks(self):
+        sys = TradingSystem(); desk = sys.book("D"); client = sys.book("C")
+        sys.trade(desk, client, "AAPL", 100, 5.0)
+        sys.set_market_price("AAPL", 5.5)
+        assert desk.Delta() == 0.0
+        assert desk.Vega() == 0.0
+
+    def test_bond_contributes_no_delta_or_vega(self):
+        from lattice import Bond
+        sys = TradingSystem(); desk = sys.book("D"); client = sys.book("C")
+        bond = Bond()
+        bond.FaceValue.set(1000.0); bond.CouponRate.set(0.05)
+        bond.YieldToMaturity.set(0.04); bond.Maturity.set(10)
+        sys.register_instrument("UST", bond)
+        sys.trade(desk, client, "UST", 5, bond.MarketValue())
+        assert desk.Delta() == 0.0          # bond has no Spot
+        assert desk.Vega() == 0.0           # bond has no Volatility
