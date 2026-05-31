@@ -578,3 +578,35 @@ class TestScenarioThreadSafety:
             thread.join()
 
         assert isinstance(captured.get("exc"), dag.ConcurrentScenarioError)
+
+
+class TestShockConvention:
+    """Spot/vol shocks are relative; rate/yield shocks are absolute (bp)."""
+
+    def test_relative_for_spot_and_vol(self):
+        from lattice.risk.shocks import shocked_value
+        assert shocked_value("Spot", 100.0, -0.20) == pytest.approx(80.0)
+        assert shocked_value("Volatility", 0.20, 0.50) == pytest.approx(0.30)
+
+    def test_absolute_for_rate_and_yield(self):
+        from lattice.risk.shocks import shocked_value
+        assert shocked_value("Rate", 0.04, 0.01) == pytest.approx(0.05)
+        assert shocked_value("YieldToMaturity", 0.05, 0.01) == pytest.approx(0.06)
+
+    def test_absolute_for_swap_rates(self):
+        from lattice.risk.shocks import shocked_value
+        assert shocked_value("DiscountRate", 0.03, 0.01) == pytest.approx(0.04)
+        assert shocked_value("FloatingRate", 0.03, 0.01) == pytest.approx(0.04)
+        assert shocked_value("FloatingSpread", 0.001, 0.0005) == pytest.approx(0.0015)
+
+    def test_engine_stress_test_rate_is_additive(self):
+        option = VanillaOption()
+        option.Spot.set(100.0); option.Strike.set(100.0)
+        option.Volatility.set(0.20); option.Rate.set(0.04)
+        engine = RiskEngine(); engine.add(option, "OPT")
+        # Expected stressed price = price with Rate moved +100bp (0.04 -> 0.05)
+        with dag.scenario():
+            option.Rate.override(0.05)
+            expected = option.Price()
+        res = engine.stress_test(Rate=0.01)
+        assert res["OPT"]["stressed_price"] == pytest.approx(expected)

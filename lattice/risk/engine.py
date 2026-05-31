@@ -23,6 +23,7 @@ from typing import Dict, Any, Optional
 import dag
 
 from .sensitivities import delta, gamma, vega, theta, rho, dv01
+from .shocks import shocked_value
 
 logger = logging.getLogger(__name__)
 
@@ -148,12 +149,15 @@ class RiskEngine:
     def stress_test(self, **shocks) -> Dict[str, Dict[str, Any]]:
         """Apply stress scenario to all instruments.
 
-        Shocks are specified as keyword arguments where the key is the
-        input name and the value is the relative shock (e.g., -0.10 for -10%).
+        Shocks are specified as keyword arguments where the key is the input
+        name and the value is the shock magnitude. Rate-like inputs (Rate,
+        YieldToMaturity, and swap rates/spreads) are shocked ADDITIVELY
+        (Rate=0.01 means +100bp); all other inputs are shocked RELATIVELY
+        (Spot=-0.10 means -10%). See lattice.risk.shocks.
 
         Args:
-            **shocks: Relative shocks by input name
-                      e.g., Spot=-0.10, Volatility=0.05
+            **shocks: Shocks by input name
+                      e.g., Spot=-0.10, Volatility=0.05, Rate=0.01
 
         Returns:
             dict mapping instrument name to result dict with:
@@ -181,7 +185,7 @@ class RiskEngine:
                     if hasattr(inst, input_name):
                         accessor = getattr(inst, input_name)
                         current_value = accessor()
-                        accessor.override(current_value * (1 + shock))
+                        accessor.override(shocked_value(input_name, current_value, shock))
 
                 stressed_price = inst.Price()
 

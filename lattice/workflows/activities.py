@@ -22,6 +22,7 @@ from typing import Any, Dict, Optional, Type
 
 import dag
 from dag.flags import Flags
+from lattice.risk.shocks import shocked_value
 
 logger = logging.getLogger(__name__)
 
@@ -289,7 +290,9 @@ async def compute_stress_test(
     Args:
         instrument_name: Identifier for results tracking
         instrument_ref: Reference to the instrument
-        shocks: Dict of input_name -> relative shock (e.g., {"Spot": -0.10})
+        shocks: Dict of input_name -> shock magnitude. Rate-like inputs
+            (Rate, YieldToMaturity, swap rates/spreads) are shocked additively
+            (bp); all other inputs are shocked relatively (e.g., {"Spot": -0.10}).
         store_uri: Store connection string (if using store paths)
 
     Returns:
@@ -310,7 +313,7 @@ async def compute_stress_test(
             if hasattr(inst, input_name):
                 accessor = getattr(inst, input_name)
                 current_value = accessor()
-                accessor.override(current_value * (1 + shock))
+                accessor.override(shocked_value(input_name, current_value, shock))
 
         stressed_price = inst.Price()
 
