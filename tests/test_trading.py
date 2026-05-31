@@ -1,7 +1,8 @@
 """Tests for trading module (positions and blotter)."""
 
 import pytest
-from lattice.trading import PositionTable, TradeBlotter
+from lattice.trading import PositionTable, TradeBlotter, Position
+from lattice import VanillaOption
 
 
 class TestPositionTable:
@@ -196,3 +197,55 @@ class TestTradeBlotter:
 
     def test_total_notional_empty(self):
         assert TradeBlotter().total_notional == 0.0
+
+
+class TestPositionInstrumentLink:
+    """Position can optionally derive its value from a live instrument."""
+
+    def _option(self):
+        o = VanillaOption()
+        o.Spot.set(100.0); o.Strike.set(100.0)
+        o.Volatility.set(0.20); o.Rate.set(0.04)
+        return o
+
+    def test_unlinked_uses_market_price(self):
+        pos = Position()
+        pos.Quantity.set(10); pos.AvgPrice.set(5.0); pos.MarketPrice.set(6.0)
+        assert pos.EffectivePrice() == 6.0
+        assert pos.MarketValue() == 60.0
+        assert pos.UnrealizedPnL() == 10.0   # 60 - 10*5
+
+    def test_linked_uses_instrument_value(self):
+        opt = self._option()
+        pos = Position(); pos.Quantity.set(10); pos.AvgPrice.set(5.0)
+        pos.LinkedInstrument.set(opt)
+        assert pos.EffectivePrice() == opt.MarketValue()
+        assert pos.MarketValue() == 10 * opt.MarketValue()
+
+    def test_dynamic_link_recomputes_then_reverts(self):
+        opt = self._option()
+        pos = Position(); pos.Quantity.set(10); pos.MarketPrice.set(5.0)
+        assert pos.MarketValue() == 50.0          # evaluated while unlinked
+        pos.LinkedInstrument.set(opt)             # link AFTER first eval
+        assert abs(pos.MarketValue() - 10 * opt.MarketValue()) < 1e-9
+        pos.LinkedInstrument.set(None)            # unlink
+        assert pos.MarketValue() == 50.0
+
+    def test_linked_reprices_on_instrument_change(self):
+        opt = self._option()
+        pos = Position(); pos.Quantity.set(10); pos.LinkedInstrument.set(opt)
+        before = pos.MarketValue()
+        opt.Spot.set(120.0)                       # ITM call -> higher value
+        assert pos.MarketValue() > before
+
+    def test_linked_zero_value_does_not_fall_back(self):
+        """A linked instrument worth 0 values the position at 0, not at MarketPrice.
+
+        Locks the `is not None` invariant: a falsy-but-present instrument value
+        must be used, never confused with 'no instrument linked'.
+        """
+        from lattice.instruments.base import Instrument
+        pos = Position(); pos.Quantity.set(10); pos.MarketPrice.set(7.0)
+        pos.LinkedInstrument.set(Instrument())    # base Instrument.MarketValue() == 0.0
+        assert pos.EffectivePrice() == 0.0        # uses the instrument's 0, not MarketPrice 7
+        assert pos.MarketValue() == 0.0

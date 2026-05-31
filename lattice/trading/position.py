@@ -61,10 +61,21 @@ class Position(dag.Model):
         """Total cost basis (absolute value)."""
         return abs(self.Quantity()) * self.AvgPrice()
 
+    @dag.computed(dag.Input | dag.Optional)
+    def LinkedInstrument(self):
+        """Optional live instrument backing this position (None = price-only)."""
+        return None
+
+    @dag.computed
+    def EffectivePrice(self) -> float:
+        """Per-unit price: the instrument's market value if linked, else MarketPrice."""
+        inst = self.LinkedInstrument()
+        return inst.MarketValue() if inst is not None else self.MarketPrice()
+
     @dag.computed
     def MarketValue(self) -> float:
-        """Current market value (signed)."""
-        return self.Quantity() * self.MarketPrice()
+        """Current market value (signed). Uses the linked instrument when present."""
+        return self.Quantity() * self.EffectivePrice()
 
     @dag.computed
     def UnrealizedPnL(self) -> float:
