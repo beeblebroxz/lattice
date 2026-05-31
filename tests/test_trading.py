@@ -1,7 +1,7 @@
 """Tests for trading module (positions and blotter)."""
 
 import pytest
-from lattice.trading import PositionTable, TradeBlotter, Position
+from lattice.trading import PositionTable, TradeBlotter, Position, TradingSystem
 from lattice import VanillaOption
 
 
@@ -249,3 +249,43 @@ class TestPositionInstrumentLink:
         pos.LinkedInstrument.set(Instrument())    # base Instrument.MarketValue() == 0.0
         assert pos.EffectivePrice() == 0.0        # uses the instrument's 0, not MarketPrice 7
         assert pos.MarketValue() == 0.0
+
+
+class TestInstrumentRegistry:
+    """TradingSystem can back a symbol with a live instrument."""
+
+    def _option(self):
+        o = VanillaOption()
+        o.Spot.set(100.0); o.Strike.set(100.0)
+        o.Volatility.set(0.20); o.Rate.set(0.04)
+        return o
+
+    def test_register_links_existing_position(self):
+        sys = TradingSystem(); desk = sys.book("D"); client = sys.book("C")
+        sys.trade(desk, client, "AAPL", 100, 5.0)        # position created first
+        opt = self._option()
+        sys.register_instrument("AAPL", opt)             # then registered
+        pos = sys.positions_for(desk)[0]
+        assert pos.LinkedInstrument() is opt
+        assert abs(pos.MarketValue() - 100 * opt.MarketValue()) < 1e-9
+
+    def test_register_links_future_position(self):
+        sys = TradingSystem(); desk = sys.book("D"); client = sys.book("C")
+        opt = self._option()
+        sys.register_instrument("AAPL", opt)             # registered first
+        sys.trade(desk, client, "AAPL", 100, 5.0)        # position created after
+        pos = sys.positions_for(desk)[0]
+        assert pos.LinkedInstrument() is opt
+
+    def test_set_market_price_raises_for_linked_symbol(self):
+        sys = TradingSystem(); desk = sys.book("D"); client = sys.book("C")
+        opt = self._option()
+        sys.register_instrument("AAPL", opt)
+        with pytest.raises(ValueError):
+            sys.set_market_price("AAPL", 5.5)
+
+    def test_set_market_price_still_works_for_unlinked(self):
+        sys = TradingSystem(); desk = sys.book("D"); client = sys.book("C")
+        sys.trade(desk, client, "AAPL", 100, 5.0)
+        sys.set_market_price("AAPL", 6.0)                # unlinked symbol: fine
+        assert sys.get_market_price("AAPL") == 6.0

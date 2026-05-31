@@ -18,6 +18,7 @@ import livetable
 from .book import Book
 from .trade import Trade
 from .position import Position
+from lattice.instruments.base import Instrument
 
 
 class TradingSystem:
@@ -78,6 +79,9 @@ class TradingSystem:
 
         # Market prices: symbol -> price
         self._market_prices: Dict[str, float] = {}
+
+        # Symbol -> live instrument (optional reactive pricing source)
+        self._instruments: Dict[str, Instrument] = {}
 
         # Trade ID counter
         self._next_trade_id = 1
@@ -217,6 +221,10 @@ class TradingSystem:
             if symbol in self._market_prices:
                 pos.MarketPrice.set(self._market_prices[symbol])
 
+            # Link to a registered instrument if one exists for this symbol
+            if symbol in self._instruments:
+                pos.LinkedInstrument.set(self._instruments[symbol])
+
             self._positions[key] = pos
         else:
             # Update existing position
@@ -260,6 +268,12 @@ class TradingSystem:
             symbol: Instrument symbol
             price: New market price
         """
+        if symbol in self._instruments:
+            raise ValueError(
+                f"Symbol '{symbol}' is instrument-linked; set the instrument's "
+                f"inputs instead (e.g. instrument.Spot.set(...)), not a scalar "
+                f"market price."
+            )
         self._market_prices[symbol] = price
 
         # Update all trades with this symbol
@@ -275,6 +289,29 @@ class TradingSystem:
     def get_market_price(self, symbol: str) -> Optional[float]:
         """Get the market price for a symbol."""
         return self._market_prices.get(symbol)
+
+    def register_instrument(self, symbol: str, instrument: Instrument) -> None:
+        """Back a symbol with a live instrument.
+
+        Existing and future positions in this symbol price reactively off the
+        instrument. For a registered symbol, move the market by setting the
+        instrument's inputs (e.g. instrument.Spot.set(...)), not set_market_price.
+
+        Registration takes precedence over any scalar price previously set via
+        set_market_price for the same symbol.
+
+        Note: only Position/Book P&L tracks the linked instrument. Trade-level
+        P&L (Trade.MarketValue/BuyerPnL/SellerPnL) is not reactive for linked
+        symbols in this version — book/position P&L is the source of truth.
+        """
+        self._instruments[symbol] = instrument
+        for (_, sym), pos in self._positions.items():
+            if sym == symbol:
+                pos.LinkedInstrument.set(instrument)
+
+    def get_instrument(self, symbol: str) -> Optional[Instrument]:
+        """Return the instrument registered for a symbol, or None."""
+        return self._instruments.get(symbol)
 
     def positions_for(self, book: Book) -> List[Position]:
         """Get all positions for a book.
