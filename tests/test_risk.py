@@ -240,14 +240,66 @@ class TestPortfolioRisk:
         assert exposure["num_long"] == 2
         assert exposure["num_short"] == 0
 
-    def test_stress_rejects_unsupported_shocks(self, trading_system):
-        """A book has no vol/rate sensitivity; those shocks are not accepted."""
+    def test_stress_accepts_vol_rate_skipped_on_unlinked_book(self, trading_system):
+        """An unlinked book has no instrument to absorb vol/rate; report them skipped."""
         system, desk = trading_system
+        result = risk.stress(desk, spot_shock=-0.10, vol_shock=0.5, rate_shock=0.01)
+        assert "spot_shock" in result["applied_shocks"]
+        assert result["skipped_shocks"] == {"vol_shock": 0.5, "rate_shock": 0.01}
+        assert result["pnl_impact"] < 0          # spot leg still moves the book
 
-        with pytest.raises(TypeError):
-            risk.stress(desk, vol_shock=0.5)
-        with pytest.raises(TypeError):
-            risk.stress(desk, rate_shock=0.01)
+
+class TestMultiFactorStress:
+    """A book of instrument-linked positions absorbs vol and rate shocks."""
+
+    def _linked_book(self):
+        from lattice.trading import TradingSystem
+        system = TradingSystem()
+        desk = system.book("DESK"); client = system.book("CLIENT")
+        opt = VanillaOption()
+        opt.Spot.set(100.0); opt.Strike.set(100.0)
+        opt.Volatility.set(0.20); opt.Rate.set(0.04)
+        system.register_instrument("OPT", opt)
+        system.trade(desk, client, "OPT", 100, opt.MarketValue())
+        return system, desk, opt
+
+    def test_vol_shock_moves_linked_book(self):
+        system, desk, opt = self._linked_book()
+        base = desk.TotalPnL()
+        result = risk.stress(desk, vol_shock=0.5)        # +50% vol -> higher option value
+        assert result["pnl_impact"] > 0
+        assert result["applied_shocks"] == {"vol_shock": 0.5}
+        assert desk.TotalPnL() == pytest.approx(base)    # reverted after scenario
+
+    def test_rate_shock_is_additive_on_linked_book(self):
+        system, desk, opt = self._linked_book()          # desk holds +100 of the option
+        base_value = opt.MarketValue()
+        with dag.scenario():
+            opt.Rate.override(0.05)                       # +100bp absolute (0.04 -> 0.05)
+            bumped_value = opt.MarketValue()
+        expected_impact = 100 * (bumped_value - base_value)
+        result = risk.stress(desk, rate_shock=0.01)
+        assert result["applied_shocks"] == {"rate_shock": 0.01}
+        assert result["pnl_impact"] == pytest.approx(expected_impact, abs=1e-6)
+
+    def test_shared_instrument_not_compounded(self):
+        """One instrument backing two symbols: a shock is applied once, not twice."""
+        from lattice.trading import TradingSystem
+        system = TradingSystem()
+        desk = system.book("DESK"); client = system.book("C")
+        opt = VanillaOption()
+        opt.Spot.set(100.0); opt.Strike.set(100.0); opt.Volatility.set(0.20); opt.Rate.set(0.04)
+        system.register_instrument("SYMA", opt)
+        system.register_instrument("SYMB", opt)          # same instrument object, two symbols
+        system.trade(desk, client, "SYMA", 10, opt.MarketValue())
+        system.trade(desk, client, "SYMB", 10, opt.MarketValue())
+        # desk now has two positions both linked to `opt`. Stress spot once.
+        result = risk.stress(desk, spot_shock=0.10)
+        with dag.scenario():
+            opt.Spot.override(110.0)                      # a SINGLE override of the shared instrument
+            single = desk.TotalPnL()
+        # Without dedup, opt.Spot would be overridden twice (110 -> 121); dedup keeps it at 110.
+        assert result["stressed_pnl"] == pytest.approx(single)
 
 
 class TestScenarios:

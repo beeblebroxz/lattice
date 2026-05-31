@@ -22,6 +22,8 @@ Example:
 from typing import TYPE_CHECKING
 import dag
 
+from .shocks import shocked_value
+
 if TYPE_CHECKING:
     from lattice.trading import Book
 
@@ -49,37 +51,62 @@ def portfolio_delta(book: "Book", bump: float = 0.01) -> float:
     return (bumped_pnl - base_pnl) / bump
 
 
-def stress(book: "Book", spot_shock: float = 0.0) -> dict:
-    """Apply a price stress to a book and return P&L impact.
+def stress(
+    book: "Book",
+    spot_shock: float = 0.0,
+    vol_shock: float = 0.0,
+    rate_shock: float = 0.0,
+) -> dict:
+    """Apply spot/vol/rate shocks to a book and return the P&L impact.
 
-    A book's P&L is a linear function of its positions' market prices
-    (``Σ Quantity × MarketPrice``), so the only risk factor a book carries is
-    price. ``spot_shock`` is applied as a relative change to each position's
-    ``MarketPrice`` (e.g. ``-0.10`` = -10%).
+    For positions linked to a live instrument, the instrument's Spot/Volatility/
+    Rate are overridden (each unique instrument once) and the book reprices
+    reactively. For price-only positions, spot_shock moves MarketPrice; vol/rate
+    have nothing to act on. Shocks that found nothing to act on are reported
+    under ``skipped_shocks`` rather than silently dropped.
 
-    Volatility and rate sensitivity do not exist at the book level (positions
-    hold only a market price). To stress vol or rates, stress the underlying
-    instruments instead via ``RiskEngine.stress_test``.
-
-    Args:
-        book: Book with positions to analyze
-        spot_shock: Relative change in position market prices (e.g., -0.10 for -10%)
-
-    Returns:
-        dict with base_pnl, stressed_pnl, pnl_impact, and spot_shock
-
-    Example:
-        # 20% sell-off
-        result = stress(book, spot_shock=-0.20)
-        print(f"P&L impact: ${result['pnl_impact']:,.2f}")
+    Shock convention (see lattice.risk.shocks): spot/vol relative, rate absolute.
     """
     base_pnl = book.TotalPnL()
+    legs = {
+        "spot_shock": ("Spot", spot_shock),
+        "vol_shock": ("Volatility", vol_shock),
+        "rate_shock": ("Rate", rate_shock),
+    }
+    applied: dict = {}
+    skipped: dict = {}
 
     with dag.scenario():
-        if spot_shock:
-            for pos in book.Positions():
-                current_price = pos.MarketPrice()
-                pos.MarketPrice.override(current_price * (1 + spot_shock))
+        # Unique linked instruments + the price-only positions.
+        instruments = []
+        seen = set()
+        unlinked = []
+        for pos in book.Positions():
+            inst = pos.LinkedInstrument()
+            if inst is not None:
+                if id(inst) not in seen:
+                    seen.add(id(inst))
+                    instruments.append(inst)
+            else:
+                unlinked.append(pos)
+
+        for leg, (factor, shock) in legs.items():
+            # A zero-magnitude leg is a no-op; report it in neither applied nor skipped.
+            if shock == 0.0:
+                continue
+            acted = False
+            for inst in instruments:
+                if hasattr(inst, factor):
+                    acc = getattr(inst, factor)
+                    acc.override(shocked_value(factor, acc(), shock))
+                    acted = True
+            if factor == "Spot":
+                for pos in unlinked:
+                    pos.MarketPrice.override(
+                        shocked_value("Spot", pos.MarketPrice(), shock)
+                    )
+                    acted = True
+            (applied if acted else skipped)[leg] = shock
 
         stressed_pnl = book.TotalPnL()
 
@@ -88,6 +115,10 @@ def stress(book: "Book", spot_shock: float = 0.0) -> dict:
         "stressed_pnl": stressed_pnl,
         "pnl_impact": stressed_pnl - base_pnl,
         "spot_shock": spot_shock,
+        "vol_shock": vol_shock,
+        "rate_shock": rate_shock,
+        "applied_shocks": applied,
+        "skipped_shocks": skipped,
     }
 
 
