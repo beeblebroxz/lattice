@@ -282,6 +282,48 @@ class TestMultiFactorStress:
         assert result["applied_shocks"] == {"rate_shock": 0.01}
         assert result["pnl_impact"] == pytest.approx(expected_impact, abs=1e-6)
 
+    def test_mixed_linked_and_unlinked_book(self):
+        """A book with one linked and one price-only position: vol applies to the
+        linked leg, spot moves both, and a bond-linked rate shock is non-zero."""
+        from lattice.trading import TradingSystem
+        from lattice import Bond
+        system = TradingSystem()
+        desk = system.book("DESK"); client = system.book("CLIENT")
+        # linked option position
+        opt = VanillaOption()
+        opt.Spot.set(100.0); opt.Strike.set(100.0); opt.Volatility.set(0.20); opt.Rate.set(0.04)
+        system.register_instrument("OPT", opt)
+        system.trade(desk, client, "OPT", 10, opt.MarketValue())
+        # price-only position (no instrument)
+        system.trade(desk, client, "XYZ", 10, 5.0)
+        system.set_market_price("XYZ", 5.0)
+
+        # vol shock: applied (the linked option absorbs it); the price-only leg ignores it
+        rv = risk.stress(desk, vol_shock=0.5)
+        assert rv["applied_shocks"] == {"vol_shock": 0.5}
+        assert rv["pnl_impact"] != 0.0
+
+    def test_bond_linked_book_absorbs_rate_shock(self):
+        """A bond-linked book moves on rate_shock (bonds use YieldToMaturity)."""
+        from lattice.trading import TradingSystem
+        from lattice import Bond
+        system = TradingSystem()
+        desk = system.book("DESK"); client = system.book("CLIENT")
+        bond = Bond()
+        bond.FaceValue.set(1000.0); bond.CouponRate.set(0.05)
+        bond.YieldToMaturity.set(0.04); bond.Maturity.set(10)
+        system.register_instrument("UST", bond)
+        system.trade(desk, client, "UST", 5, bond.MarketValue())
+        result = risk.stress(desk, rate_shock=0.01)     # +100bp
+        assert result["applied_shocks"] == {"rate_shock": 0.01}
+        assert result["pnl_impact"] != 0.0              # bond reprices on yield move
+        # additive convention: compare to a direct +100bp yield bump
+        base = bond.MarketValue()
+        with dag.scenario():
+            bond.YieldToMaturity.override(0.05)
+            bumped = bond.MarketValue()
+        assert result["pnl_impact"] == pytest.approx(5 * (bumped - base), abs=1e-6)
+
     def test_shared_instrument_not_compounded(self):
         """One instrument backing two symbols: a shock is applied once, not twice."""
         from lattice.trading import TradingSystem

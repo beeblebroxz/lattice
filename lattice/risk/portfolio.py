@@ -66,12 +66,16 @@ def stress(
     under ``skipped_shocks`` rather than silently dropped.
 
     Shock convention (see lattice.risk.shocks): spot/vol relative, rate absolute.
+
+    The rate leg covers both ``Rate`` (option rate input) and ``YieldToMaturity``
+    (bond rate input), so bond-linked books reprice correctly on rate_shock.
+    Swap-specific rate inputs (FloatingRate, DiscountRate) are a follow-up.
     """
     base_pnl = book.TotalPnL()
     legs = {
-        "spot_shock": ("Spot", spot_shock),
-        "vol_shock": ("Volatility", vol_shock),
-        "rate_shock": ("Rate", rate_shock),
+        "spot_shock": (("Spot",), spot_shock),
+        "vol_shock": (("Volatility",), vol_shock),
+        "rate_shock": (("Rate", "YieldToMaturity"), rate_shock),
     }
     applied: dict = {}
     skipped: dict = {}
@@ -90,17 +94,19 @@ def stress(
             else:
                 unlinked.append(pos)
 
-        for leg, (factor, shock) in legs.items():
+        for leg, (factors, shock) in legs.items():
             # A zero-magnitude leg is a no-op; report it in neither applied nor skipped.
             if shock == 0.0:
                 continue
             acted = False
             for inst in instruments:
-                if hasattr(inst, factor):
-                    acc = getattr(inst, factor)
-                    acc.override(shocked_value(factor, acc(), shock))
-                    acted = True
-            if factor == "Spot":
+                for factor in factors:
+                    if hasattr(inst, factor):
+                        acc = getattr(inst, factor)
+                        acc.override(shocked_value(factor, acc(), shock))
+                        acted = True
+            # The spot leg also moves price-only positions' MarketPrice.
+            if "Spot" in factors:
                 for pos in unlinked:
                     pos.MarketPrice.override(
                         shocked_value("Spot", pos.MarketPrice(), shock)

@@ -147,6 +147,11 @@ class Book(dag.Model):
 
         Positions with no linked instrument, or whose instrument lacks the
         required input (e.g. a bond has no Spot), contribute nothing.
+
+        Note: this uses the instrument's per-unit Price sensitivity. For
+        instruments where MarketValue() differs from Price() (e.g. forwards),
+        the aggregate may not equal the book's mark sensitivity; options/bonds
+        (the supported linked instruments) are consistent.
         """
         from lattice.risk import sensitivities
 
