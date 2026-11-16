@@ -13,6 +13,7 @@ Uses hybrid storage:
 
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
+import math
 import livetable
 
 from .book import Book
@@ -77,6 +78,11 @@ class TradingSystem:
         # Position cache: (book_id, symbol) -> Position
         self._positions: Dict[Tuple[str, str], Position] = {}
 
+        # The same positions indexed by book and by symbol, so a trade or a
+        # price tick touches only the positions it concerns.
+        self._book_positions: Dict[str, List[Position]] = {}
+        self._symbol_positions: Dict[str, List[Position]] = {}
+
         # Market prices: symbol -> price
         self._market_prices: Dict[str, float] = {}
 
@@ -116,6 +122,7 @@ class TradingSystem:
         book._set_positions([])
 
         self._books[book_id] = book
+        self._book_positions[book_id] = []
         return book
 
     def get_book(self, book_id: str) -> Optional[Book]:
@@ -155,9 +162,34 @@ class TradingSystem:
 
         Returns:
             Trade instance (dag.Model)
+
+        Raises:
+            ValueError: If the trade is not valid: a non-positive or
+                non-integer quantity, a non-finite price, an empty symbol, a
+                book that does not belong to this system, or the same book on
+                both sides.
         """
+        if isinstance(quantity, bool) or not isinstance(quantity, int):
+            raise ValueError(f"Quantity must be an integer, got {quantity!r}")
         if quantity <= 0:
             raise ValueError("Quantity must be positive")
+        if isinstance(price, bool) or not isinstance(price, (int, float)):
+            raise ValueError(f"Price must be a number, got {price!r}")
+        if not math.isfinite(price):
+            raise ValueError(f"Price must be finite, got {price!r}")
+        if not isinstance(symbol, str) or not symbol:
+            raise ValueError("Symbol must be a non-empty string")
+        for side, book in (("Buyer", buyer), ("Seller", seller)):
+            if self._books.get(book.BookId()) is not book:
+                raise ValueError(
+                    f"{side} book '{book.BookId()}' does not belong to this "
+                    f"TradingSystem; create it with system.book()."
+                )
+        if buyer is seller:
+            raise ValueError(
+                f"Buyer and seller are the same book ('{buyer.BookId()}')"
+            )
+        price = float(price)
 
         ts = timestamp or datetime.now()
         trade_id = self._next_trade_id
@@ -226,17 +258,20 @@ class TradingSystem:
                 pos.LinkedInstrument.set(self._instruments[symbol])
 
             self._positions[key] = pos
+            self._symbol_positions.setdefault(symbol, []).append(pos)
+
+            # The book's list only changes when a position is first opened;
+            # going flat or re-opening is tracked reactively via IsFlat.
+            book_positions = self._book_positions[book_id]
+            book_positions.append(pos)
+            self._books[book_id]._set_positions(book_positions)
         else:
             # Update existing position
             pos = self._positions[key]
             old_qty = pos.Quantity()
             new_qty = old_qty + quantity_delta
 
-            if new_qty == 0:
-                # Position closed
-                pos.Quantity.set(0)
-                pos.AvgPrice.set(0.0)
-            elif (old_qty >= 0 and quantity_delta > 0) or (old_qty <= 0 and quantity_delta < 0):
+            if (old_qty >= 0 and quantity_delta > 0) or (old_qty <= 0 and quantity_delta < 0):
                 # Adding to position - calculate weighted average price
                 old_cost = abs(old_qty) * pos.AvgPrice()
                 new_cost = abs(quantity_delta) * price
@@ -244,20 +279,19 @@ class TradingSystem:
                 pos.Quantity.set(new_qty)
                 pos.AvgPrice.set(new_avg)
             else:
-                # Reducing position - keep original avg price
+                # Reducing, closing or flipping: the closed part realizes P&L
+                # against the average entry price.
+                closed_qty = min(abs(old_qty), abs(quantity_delta))
+                direction = 1 if old_qty > 0 else -1
+                realized = closed_qty * (price - pos.AvgPrice()) * direction
+                pos.RealizedPnL.set(pos.RealizedPnL() + realized)
                 pos.Quantity.set(new_qty)
-                # If position flips, use new price
-                if (old_qty > 0 and new_qty < 0) or (old_qty < 0 and new_qty > 0):
+                if new_qty == 0:
+                    # Position closed
+                    pos.AvgPrice.set(0.0)
+                elif (old_qty > 0) != (new_qty > 0):
+                    # Position flipped: the remainder was opened at this price
                     pos.AvgPrice.set(price)
-
-        # Update book's position list
-        book = self._books.get(book_id)
-        if book:
-            book_positions = [
-                p for (bid, _), p in self._positions.items()
-                if bid == book_id and not p.IsFlat()
-            ]
-            book._set_positions(book_positions)
 
     def set_market_price(self, symbol: str, price: float) -> None:
         """Set the market price for a symbol.
@@ -282,9 +316,8 @@ class TradingSystem:
                 trade.MarketPrice.set(price)
 
         # Update all positions with this symbol
-        for (book_id, sym), pos in self._positions.items():
-            if sym == symbol:
-                pos.MarketPrice.set(price)
+        for pos in self._symbol_positions.get(symbol, ()):
+            pos.MarketPrice.set(price)
 
     def get_market_price(self, symbol: str) -> Optional[float]:
         """Get the market price for a symbol."""
@@ -305,9 +338,8 @@ class TradingSystem:
         symbols in this version — book/position P&L is the source of truth.
         """
         self._instruments[symbol] = instrument
-        for (_, sym), pos in self._positions.items():
-            if sym == symbol:
-                pos.LinkedInstrument.set(instrument)
+        for pos in self._symbol_positions.get(symbol, ()):
+            pos.LinkedInstrument.set(instrument)
 
     def get_instrument(self, symbol: str) -> Optional[Instrument]:
         """Return the instrument registered for a symbol, or None."""
@@ -322,10 +354,9 @@ class TradingSystem:
         Returns:
             List of Position instances
         """
-        book_id = book.BookId()
         return [
-            p for (bid, _), p in self._positions.items()
-            if bid == book_id and not p.IsFlat()
+            p for p in self._book_positions.get(book.BookId(), ())
+            if not p.IsFlat()
         ]
 
     def trades_for(self, book: Book) -> List[Trade]:
@@ -344,9 +375,10 @@ class TradingSystem:
         ]
 
     def total_pnl(self) -> float:
-        """Total P&L across all books.
+        """Total P&L (realized plus unrealized) across all books.
 
-        Note: This should sum to zero as every trade has a buyer and seller.
+        This sums to zero for symbols marked with a single price, since every
+        trade has a buyer and a seller.
         """
         return sum(book.TotalPnL() for book in self._books.values())
 

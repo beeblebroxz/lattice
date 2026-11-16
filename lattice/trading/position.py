@@ -48,6 +48,11 @@ class Position(Storable, dag.Model):
         """Average entry price."""
         return 0.0
 
+    @dag.computed(dag.Persisted)
+    def RealizedPnL(self) -> float:
+        """P&L locked in by trades that reduced, closed or flipped the position."""
+        return 0.0
+
     @dag.computed(dag.Input | dag.Overridable)
     def MarketPrice(self) -> float:
         """Current market price for valuation.
@@ -86,6 +91,11 @@ class Position(Storable, dag.Model):
         = MarketValue - (Quantity * AvgPrice)
         """
         return self.MarketValue() - (self.Quantity() * self.AvgPrice())
+
+    @dag.computed
+    def TotalPnL(self) -> float:
+        """Realized plus unrealized P&L."""
+        return self.RealizedPnL() + self.UnrealizedPnL()
 
     @dag.computed
     def IsLong(self) -> bool:

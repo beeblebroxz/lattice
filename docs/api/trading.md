@@ -29,12 +29,17 @@ print(f"Desk P&L: ${desk.TotalPnL():.2f}")
 
 | Method | Description |
 |--------|-------------|
-| `book(name, book_type="trading")` | Create or get a book |
-| `trade(buyer, seller, symbol, quantity, price)` | Execute a trade between books |
+| `book(book_id, name=None, book_type="trading", parent_book_id="")` | Create or get a book |
+| `trade(buyer, seller, symbol, quantity, price)` | Execute a trade between books (see validation below) |
 | `set_market_price(symbol, price)` | Set market price for P&L calculation |
 | `get_market_price(symbol)` | Get current market price |
 | `register_instrument(symbol, inst)` | Back a symbol with a live instrument (reactive pricing) |
 | `show()` | Open interactive dashboard |
+
+`trade()` raises `ValueError`, before recording anything, for a quantity that
+is not a positive integer, a price that is not a finite number, an empty
+symbol, a book that was not created by this system, or the same book on both
+sides. Negative prices are allowed (spreads and swaps trade at them).
 
 ### Properties
 
@@ -62,16 +67,22 @@ print(f"Total P&L: ${desk.TotalPnL():.2f}")
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `Name` | str | Book name/identifier |
+| `BookId` | str | Unique identifier |
+| `Name` | str | Human-readable name (defaults to the id) |
 | `BookType` | str | "trading", "customer", etc. |
+| `ParentBookId` | str | Parent book id (stored; no roll-up yet) |
 
 ### Outputs
 
 | Field | Description |
 |-------|-------------|
-| `Positions()` | List of Position objects |
-| `TotalPnL()` | Sum of all position P&L |
-| `TotalMarketValue()` | Sum of all position market values |
+| `Positions()` | Open (non-flat) Position objects |
+| `AllPositions()` | Every position the book has held, including flat ones |
+| `TotalPnL()` | Realized plus unrealized P&L |
+| `UnrealizedPnL()` | Mark-to-market P&L on open positions |
+| `RealizedPnL()` | P&L locked in by reducing, closing or flipping positions |
+| `NetExposure()` / `GrossExposure()` | Signed / absolute sum of position market values |
+| `LongExposure()` / `ShortExposure()` | Market value of long / short positions |
 | `Delta()` / `Vega()` / `Gamma()` | Portfolio Greeks (sum over instrument-linked positions) |
 
 ## Trade
@@ -94,8 +105,8 @@ for trade in system.trades:
 | `Symbol()` | Instrument symbol |
 | `Quantity()` | Trade quantity |
 | `Price()` | Execution price |
-| `Buyer()` | Buying book |
-| `Seller()` | Selling book |
+| `BuyerBookId()` | Id of the buying book |
+| `SellerBookId()` | Id of the selling book |
 | `Timestamp()` | Execution timestamp |
 
 ## Position
@@ -108,7 +119,8 @@ for pos in desk.Positions():
     print(f"Quantity: {pos.Quantity()}")
     print(f"Avg Price: ${pos.AvgPrice():.2f}")
     print(f"Market Price: ${pos.MarketPrice():.2f}")
-    print(f"P&L: ${pos.PnL():.2f}")
+    print(f"Unrealized P&L: ${pos.UnrealizedPnL():.2f}")
+    print(f"Realized P&L: ${pos.RealizedPnL():.2f}")
 ```
 
 ### Fields
@@ -119,9 +131,17 @@ for pos in desk.Positions():
 | `Quantity()` | Net position quantity |
 | `AvgPrice()` | Average entry price |
 | `MarketPrice()` | Current market price |
-| `MarketValue()` | Quantity * MarketPrice |
-| `Cost()` | Quantity * AvgPrice |
-| `PnL()` | MarketValue - Cost |
+| `MarketValue()` | Quantity × per-unit price (the linked instrument's value if there is one, else `MarketPrice`) |
+| `CostBasis()` | abs(Quantity) × AvgPrice |
+| `UnrealizedPnL()` | MarketValue − Quantity × AvgPrice |
+| `RealizedPnL()` | P&L realized by trades that reduced, closed or flipped the position |
+| `TotalPnL()` | Realized plus unrealized |
+
+Adding to a position re-averages `AvgPrice`. Reducing it keeps `AvgPrice` and
+realizes `closed quantity × (trade price − AvgPrice)` (sign reversed for a
+short). Trading through zero realizes the whole old position and opens the
+remainder at the trade price. Because every trade has two sides,
+`system.total_pnl()` is zero for symbols marked at a single price.
 
 ## PositionTable (livetable-based)
 
@@ -258,7 +278,7 @@ print(f"Client P&L: ${client.TotalPnL():.2f}")
 print("\nMarket Maker Positions:")
 for pos in mm.Positions():
     print(f"  {pos.Symbol()}: {pos.Quantity()} @ ${pos.AvgPrice():.2f} "
-          f"(P&L: ${pos.PnL():.2f})")
+          f"(P&L: ${pos.TotalPnL():.2f})")
 
 # Market moves - P&L updates automatically
 system.set_market_price("AAPL_C_150", 6.00)

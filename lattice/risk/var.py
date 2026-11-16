@@ -18,6 +18,7 @@ Example:
 """
 
 import math
+from statistics import NormalDist
 from typing import TYPE_CHECKING, Dict, Optional
 
 if TYPE_CHECKING:
@@ -47,7 +48,7 @@ def parametric_var(
 
     Args:
         book: Book with positions to analyze
-        confidence: Confidence level (0.90, 0.95, or 0.99)
+        confidence: Confidence level, strictly between 0 and 1 (e.g. 0.95)
         holding_period: Number of trading days
         volatility: Annual volatility (if None, uses 20% default)
 
@@ -67,14 +68,17 @@ def parametric_var(
         # 10-day 99% VaR (regulatory)
         result = parametric_var(book, confidence=0.99, holding_period=10)
     """
-    # Get z-score for confidence level
+    if not 0 < confidence < 1:
+        raise ValueError(
+            f"confidence must be between 0 and 1 (exclusive), got {confidence!r}"
+        )
+
+    # z-score for the confidence level: z = Phi^{-1}(c). The tabulated values
+    # are the conventional rounded ones; anything else is computed.
     if confidence in Z_SCORES:
         z = Z_SCORES[confidence]
     else:
-        # Approximate z-score using inverse normal CDF
-        # For confidence c, z = Phi^{-1}(c)
-        # Using simple approximation for common values
-        z = 1.645  # Default to 95%
+        z = NormalDist().inv_cdf(confidence)
 
     # Portfolio value (use gross exposure as proxy for position size)
     portfolio_value = book.GrossExposure()
@@ -184,5 +188,5 @@ def var_report(
         "var_matrix": var_matrix,
         "contributions": contributions,
         "portfolio_value": book.GrossExposure(),
-        "volatility": volatility or 0.20,
+        "volatility": 0.20 if volatility is None else volatility,
     }

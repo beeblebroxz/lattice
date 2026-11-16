@@ -34,7 +34,7 @@ class Book(Storable, dag.Model):
         # Positions are managed by TradingSystem
         # Access via book.Positions() after system.trade()
 
-        print(book.TotalPnL())        # Sum of position P&Ls
+        print(book.TotalPnL())        # Realized + unrealized P&L
         print(book.GrossExposure())   # Sum of absolute values
         print(book.NetExposure())     # Net market value
     """
@@ -61,17 +61,26 @@ class Book(Storable, dag.Model):
         """Parent book ID for hierarchy roll-up (optional)."""
         return ""
 
+    @dag.computed(dag.Input)
+    def AllPositions(self) -> List[Position]:
+        """Every position this book has held, including ones now flat.
+
+        Maintained by TradingSystem. Flat positions stay here because they
+        still carry realized P&L. It is a dag input, so everything computed
+        from it updates when the system adds a position.
+        """
+        return []
+
     # Internal: reference to the trading system (set by TradingSystem)
     _system: Optional["TradingSystem"] = None
-    _positions: List[Position] = []
 
     def _set_system(self, system: "TradingSystem") -> None:
         """Set the trading system reference (called by TradingSystem)."""
         self._system = system
 
     def _set_positions(self, positions: List[Position]) -> None:
-        """Update positions list (called by TradingSystem)."""
-        self._positions = positions
+        """Replace the position list (called by TradingSystem)."""
+        self.AllPositions.set(list(positions))
 
     # ==================== Computed from positions ====================
 
@@ -83,16 +92,26 @@ class Book(Storable, dag.Model):
 
     @dag.computed
     def Positions(self) -> List[Position]:
-        """All positions for this book.
+        """Open (non-flat) positions for this book.
 
         Positions are aggregated from trades by the TradingSystem.
         """
-        return self._positions
+        return [pos for pos in self.AllPositions() if not pos.IsFlat()]
+
+    @dag.computed
+    def UnrealizedPnL(self) -> float:
+        """Sum of unrealized P&L across open positions."""
+        return sum(pos.UnrealizedPnL() for pos in self.Positions())
+
+    @dag.computed
+    def RealizedPnL(self) -> float:
+        """Sum of realized P&L across all positions, including closed ones."""
+        return sum(pos.RealizedPnL() for pos in self.AllPositions())
 
     @dag.computed
     def TotalPnL(self) -> float:
-        """Sum of unrealized P&L across all positions."""
-        return sum(pos.UnrealizedPnL() for pos in self.Positions())
+        """Realized plus unrealized P&L."""
+        return self.RealizedPnL() + self.UnrealizedPnL()
 
     @dag.computed
     def GrossExposure(self) -> float:
@@ -150,10 +169,9 @@ class Book(Storable, dag.Model):
         Positions with no linked instrument, or whose instrument lacks the
         required input (e.g. a bond has no Spot), contribute nothing.
 
-        Note: this uses the instrument's per-unit Price sensitivity. For
-        instruments where MarketValue() differs from Price() (e.g. forwards),
-        the aggregate may not equal the book's mark sensitivity; options/bonds
-        (the supported linked instruments) are consistent.
+        The sensitivity is taken on the instrument's MarketValue, which is
+        what the position is marked at, so the aggregate is the sensitivity
+        of the book's own value.
         """
         from lattice.risk import sensitivities
 
@@ -166,5 +184,5 @@ class Book(Storable, dag.Model):
             inst = pos.LinkedInstrument()
             if inst is None or not hasattr(inst, required):
                 continue
-            total += pos.Quantity() * fn(inst)
+            total += pos.Quantity() * fn(inst, output_name="MarketValue")
         return total

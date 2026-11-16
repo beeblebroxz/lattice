@@ -32,7 +32,10 @@ def portfolio_delta(book: "Book", bump: float = 0.01) -> float:
     """Compute aggregate delta exposure for a book's positions.
 
     This measures how much the book's P&L changes for a $1 move
-    in all underlying prices.
+    in all underlying prices. For a position linked to a live instrument the
+    underlying is the instrument's Spot (each instrument bumped once); for a
+    price-only position it is the position's MarketPrice. Linked instruments
+    with no Spot (e.g. bonds) have no underlying price and contribute nothing.
 
     Args:
         book: Book with positions to analyze
@@ -44,8 +47,14 @@ def portfolio_delta(book: "Book", bump: float = 0.01) -> float:
     base_pnl = book.TotalPnL()
 
     with dag.scenario():
+        bumped = set()
         for pos in book.Positions():
-            pos.MarketPrice.override(pos.MarketPrice() + bump)
+            inst = pos.LinkedInstrument()
+            if inst is None:
+                pos.MarketPrice.override(pos.MarketPrice() + bump)
+            elif id(inst) not in bumped and hasattr(inst, "Spot"):
+                bumped.add(id(inst))
+                inst.Spot.override(inst.Spot() + bump)
         bumped_pnl = book.TotalPnL()
 
     return (bumped_pnl - base_pnl) / bump
@@ -67,15 +76,16 @@ def stress(
 
     Shock convention (see lattice.risk.shocks): spot/vol relative, rate absolute.
 
-    The rate leg covers both ``Rate`` (option rate input) and ``YieldToMaturity``
-    (bond rate input), so bond-linked books reprice correctly on rate_shock.
-    Swap-specific rate inputs (FloatingRate, DiscountRate) are a follow-up.
+    The rate leg covers ``Rate`` (options, forwards), ``YieldToMaturity``
+    (bonds) and ``DiscountRate`` (swaps), so books linked to any of them
+    reprice on rate_shock. A swap's FloatingRate is the coupon already fixed
+    for the current period, so a market rate move leaves it alone once set.
     """
     base_pnl = book.TotalPnL()
     legs = {
         "spot_shock": (("Spot",), spot_shock),
         "vol_shock": (("Volatility",), vol_shock),
-        "rate_shock": (("Rate", "YieldToMaturity"), rate_shock),
+        "rate_shock": (("Rate", "YieldToMaturity", "DiscountRate"), rate_shock),
     }
     applied: dict = {}
     skipped: dict = {}

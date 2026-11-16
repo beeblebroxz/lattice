@@ -279,8 +279,12 @@ class InterestRateSwap(Instrument):
 
     @dag.computed(dag.Input | dag.Overridable)
     def FloatingRate(self) -> float:
-        """Current floating rate (e.g., SOFR)."""
-        return 0.025
+        """Floating rate already fixed for the current period (e.g., SOFR).
+
+        Defaults to the discount rate, i.e. a swap valued on a reset date.
+        Set it when the current coupon was fixed at a different level.
+        """
+        return self.DiscountRate()
 
     @dag.computed(dag.Input | dag.Overridable)
     def DiscountRate(self) -> float:
@@ -291,12 +295,6 @@ class InterestRateSwap(Instrument):
     def FloatingSpread(self) -> float:
         """Spread over the floating index."""
         return 0.0
-
-    # Alias for risk module compatibility (DV01 detection)
-    @dag.computed(dag.Input | dag.Overridable)
-    def YieldToMaturity(self) -> float:
-        """Alias for DiscountRate (risk module compatibility)."""
-        return self.DiscountRate()
 
     # ==================== Intermediate Calculations ====================
 
@@ -361,20 +359,31 @@ class InterestRateSwap(Instrument):
         """
         Present value of the floating leg.
 
-        The floating leg (coupons only, no principal exchange) is valued as:
-        FloatingLegPV = Notional * (1 - DF_n)
+        The floating leg (coupons only, no principal exchange) is valued by
+        replication, as a floating rate note less a zero-coupon bond:
 
-        This is derived from replication:
-        - Long a floating rate note (prices at par = Notional at reset)
-        - Short a zero-coupon bond (prices at Notional * DF_n)
+        FloatingLegPV = Notional * [(1 + L/f) * DF_1 - DF_n]
+                        + Notional * spread/f * Annuity
 
-        For off-reset dates, this is a simplification. A full implementation
-        would account for accrued interest to the next reset.
+        - (1 + L/f) * DF_1: after the next coupon (already fixed at
+          FloatingRate L) the note is worth par, so today it is worth par plus
+          that coupon, discounted one period. When L equals the discount rate
+          this is exactly 1, giving the familiar Notional * (1 - DF_n).
+        - DF_n: the principal, which a swap does not exchange.
+        - The spread is a fixed stream paid on top of the index.
+
+        Accrual within the current period is not modelled.
         """
         r = self.PeriodicDiscountRate()
         n = self.NumPeriods()
+        if n <= 0:
+            return 0.0
+        freq = self.Frequency()
+        df_1 = 1 / (1 + r)
         df_n = 1 / ((1 + r) ** n)
-        return self.Notional() * (1 - df_n)
+        index_pv = (1 + self.FloatingRate() / freq) * df_1 - df_n
+        spread_pv = self.FloatingSpread() / freq * self.Annuity()
+        return self.Notional() * (index_pv + spread_pv)
 
     @dag.computed
     def NPV(self) -> float:
@@ -402,21 +411,17 @@ class InterestRateSwap(Instrument):
         """
         The fixed rate that makes the swap value zero (fair rate).
 
-        ParRate = (1 - DF_n) / Annuity * Frequency
+        ParRate = FloatingLegPV / (Notional * Annuity) * Frequency
 
-        where DF_n = final discount factor
+        On a reset date with no spread this is (1 - DF_n) / Annuity * Frequency.
         """
-        r = self.PeriodicDiscountRate()
-        n = self.NumPeriods()
-        freq = self.Frequency()
-
-        df_n = 1 / ((1 + r) ** n)
         annuity = self.Annuity()
+        notional = self.Notional()
 
-        if annuity == 0:
+        if annuity == 0 or notional == 0:
             return 0.0
 
-        return (1 - df_n) / annuity * freq
+        return self.FloatingLegPV() / (notional * annuity) * self.Frequency()
 
     # ==================== Risk Metrics ====================
 

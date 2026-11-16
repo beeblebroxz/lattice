@@ -219,3 +219,44 @@ class TestBlackScholesRho:
             volatility=0.2, time_to_expiry=1.0, is_call=False
         )
         assert rho < 0
+
+
+class TestDegenerateInputs:
+    """Zero volatility and non-positive spot or strike price as their limits."""
+
+    KW = dict(rate=0.05, dividend=0.0, time_to_expiry=1.0)
+
+    def test_zero_vol_out_of_the_money_call_is_worthless(self):
+        price = black_scholes_price(80.0, 100.0, volatility=0.0, is_call=True, **self.KW)
+        assert price == 0.0
+
+    def test_zero_vol_in_the_money_is_discounted_intrinsic(self):
+        call = black_scholes_price(120.0, 100.0, volatility=0.0, is_call=True, **self.KW)
+        put = black_scholes_price(120.0, 100.0, volatility=0.0, is_call=False, **self.KW)
+        assert call == pytest.approx(120.0 - 100.0 * math.exp(-0.05))
+        assert put == 0.0
+
+    def test_zero_vol_greeks(self):
+        assert black_scholes_delta(120.0, 100.0, volatility=0.0, is_call=True, **self.KW) == 1.0
+        assert black_scholes_delta(80.0, 100.0, volatility=0.0, is_call=True, **self.KW) == 0.0
+        assert black_scholes_gamma(120.0, 100.0, 0.05, 0.0, 0.0, 1.0) == 0.0
+        assert black_scholes_vega(120.0, 100.0, 0.05, 0.0, 0.0, 1.0) == 0.0
+
+    def test_prices_never_negative_as_vol_goes_to_zero(self):
+        for spot in (50.0, 80.0, 100.0, 120.0, 200.0):
+            for is_call in (True, False):
+                price = black_scholes_price(
+                    spot, 100.0, volatility=0.0, is_call=is_call, **self.KW
+                )
+                assert price >= 0.0
+
+    def test_zero_spot(self):
+        call = black_scholes_price(0.0, 100.0, volatility=0.2, is_call=True, **self.KW)
+        put = black_scholes_price(0.0, 100.0, volatility=0.2, is_call=False, **self.KW)
+        assert call == 0.0
+        assert put == pytest.approx(100.0 * math.exp(-0.05))
+        assert black_scholes_gamma(0.0, 100.0, 0.05, 0.0, 0.2, 1.0) == 0.0
+
+    def test_zero_strike_call_is_the_stock(self):
+        call = black_scholes_price(100.0, 0.0, volatility=0.2, is_call=True, **self.KW)
+        assert call == pytest.approx(100.0)

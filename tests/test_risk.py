@@ -704,3 +704,188 @@ class TestShockConvention:
             expected = option.Price()
         res = engine.stress_test(Rate=0.01)
         assert res["OPT"]["stressed_price"] == pytest.approx(expected)
+
+
+class TestGreekUnits:
+    """Vega, rho, theta and DV01 are quoted in fixed units whatever the bump."""
+
+    def test_vega_independent_of_bump(self):
+        option = VanillaOption()
+        assert risk.vega(option, bump=0.001) == pytest.approx(option.Vega(), rel=1e-2)
+        assert risk.vega(option, bump=0.01) == pytest.approx(option.Vega(), rel=1e-2)
+
+    def test_rho_independent_of_bump(self):
+        option = VanillaOption()
+        assert risk.rho(option, bump=0.001) == pytest.approx(option.Rho(), rel=1e-2)
+
+    def test_dv01_independent_of_bump(self):
+        bond = Bond()
+        assert risk.dv01(bond, bump=0.00001) == pytest.approx(risk.dv01(bond), rel=1e-2)
+
+    def test_engine_bump_does_not_rescale_vega(self):
+        engine = RiskEngine()
+        option = VanillaOption()
+        engine.add(option, "opt")
+        greeks = engine.compute_greeks(bump=0.001)["opt"]
+        assert greeks["vega"] == pytest.approx(option.Vega(), rel=1e-2)
+        assert greeks["rho"] == pytest.approx(option.Rho(), rel=1e-2)
+
+    def test_theta_is_next_day_decay(self):
+        option = VanillaOption()
+        option.TimeToExpiry.set(2 / 365)
+        today = option.Price()
+        option.TimeToExpiry.set(1 / 365)
+        tomorrow = option.Price()
+        option.TimeToExpiry.set(2 / 365)
+        assert risk.theta(option) == pytest.approx(tomorrow - today)
+
+    def test_theta_on_last_day_decays_to_intrinsic(self):
+        option = VanillaOption()  # at the money: intrinsic value is zero
+        option.TimeToExpiry.set(0.5 / 365)
+        # Half a day left: all remaining value goes, quoted at a per-day rate.
+        assert risk.theta(option) == pytest.approx(-option.Price() * 2)
+
+    def test_theta_at_expiry_is_zero(self):
+        option = VanillaOption()
+        option.TimeToExpiry.set(0.0)
+        assert risk.theta(option) == 0.0
+
+
+class TestInstrumentsWithoutPrice:
+    """Risk measures fall back to MarketValue for instruments with no Price."""
+
+    def test_forward_delta_uses_market_value(self):
+        forward = Forward()
+        assert not hasattr(forward, "Price")
+        assert risk.delta(forward) == pytest.approx(forward.Delta(), rel=1e-6)
+
+    def test_engine_covers_forward_and_stock(self):
+        engine = RiskEngine()
+        engine.add(Forward(), "fwd")
+        engine.add(Stock(), "stk")
+        greeks = engine.compute_greeks()
+        assert greeks["fwd"]["delta"] == pytest.approx(1.0, rel=1e-6)
+        assert greeks["stk"]["delta"] == pytest.approx(1.0)
+
+        stress = engine.stress_test(Spot=-0.10)
+        assert stress["fwd"]["price_impact"] == pytest.approx(-10.0)
+        assert stress["stk"]["price_impact"] == pytest.approx(-10.0)
+
+    def test_swap_dv01_bumps_discount_rate(self):
+        from lattice import InterestRateSwap
+
+        swap = InterestRateSwap()
+        assert risk.dv01(swap) == pytest.approx(swap.DV01(), rel=1e-2)
+
+        engine = RiskEngine()
+        engine.add(swap, "swap")
+        assert engine.compute_greeks()["swap"]["dv01"] == pytest.approx(swap.DV01(), rel=1e-2)
+
+    def test_dv01_without_a_rate_input_raises(self):
+        with pytest.raises(AttributeError):
+            risk.dv01(Stock())
+
+
+class TestLinkedBookRisk:
+    """Book-level risk covers stock, forward and swap linked positions."""
+
+    @pytest.fixture
+    def system(self):
+        system = TradingSystem()
+        system.book("DESK")
+        system.book("CLIENT")
+        return system
+
+    def test_stock_linked_position_is_valued(self, system):
+        desk, client = system.get_book("DESK"), system.get_book("CLIENT")
+        stock = Stock()
+        stock.Spot.set(100.0)
+        system.register_instrument("AAPL", stock)
+        system.trade(desk, client, "AAPL", 100, 100.0)
+
+        assert desk.NetExposure() == pytest.approx(10_000.0)
+        assert desk.TotalPnL() == pytest.approx(0.0)
+        assert desk.Delta() == pytest.approx(100.0)
+
+        stock.Spot.set(101.0)
+        assert desk.TotalPnL() == pytest.approx(100.0)
+        assert risk.stress(desk, spot_shock=-0.10)["pnl_impact"] == pytest.approx(-1010.0)
+
+    def test_forward_linked_book_delta(self, system):
+        desk, client = system.get_book("DESK"), system.get_book("CLIENT")
+        forward = Forward()
+        forward.ContractSize.set(10.0)
+        system.register_instrument("FWD", forward)
+        system.trade(desk, client, "FWD", 3, forward.MarketValue())
+        assert desk.Delta() == pytest.approx(3 * forward.Delta(), rel=1e-6)
+
+    def test_portfolio_delta_covers_linked_and_price_only(self, system):
+        desk, client = system.get_book("DESK"), system.get_book("CLIENT")
+        option = VanillaOption()
+        system.register_instrument("OPT", option)
+        system.trade(desk, client, "OPT", 10, option.Price())
+        system.trade(desk, client, "PLAIN", 100, 5.0)
+
+        expected = 10 * option.Delta() + 100
+        assert risk.portfolio_delta(desk) == pytest.approx(expected, rel=1e-3)
+
+    def test_swap_linked_book_reprices_on_rate_shock(self, system):
+        from lattice import InterestRateSwap
+
+        desk, client = system.get_book("DESK"), system.get_book("CLIENT")
+        swap = InterestRateSwap()
+        system.register_instrument("SWAP", swap)
+        system.trade(desk, client, "SWAP", 1, 0.0)
+
+        result = risk.stress(desk, rate_shock=0.01)
+        assert result["applied_shocks"] == {"rate_shock": 0.01}
+        # Payer swap gains roughly 100 x DV01 when rates rise 100bp.
+        assert result["pnl_impact"] == pytest.approx(100 * swap.DV01(), rel=0.05)
+
+    def test_stress_survives_total_loss_and_vol_collapse(self, system):
+        desk, client = system.get_book("DESK"), system.get_book("CLIENT")
+        option = VanillaOption()
+        system.register_instrument("OPT", option)
+        system.trade(desk, client, "OPT", 10, option.Price())
+
+        wipeout = risk.stress(desk, spot_shock=-1.0)
+        assert wipeout["stressed_pnl"] == pytest.approx(-10 * option.Price())
+
+        no_vol = risk.stress(desk, vol_shock=-1.0)
+        forward_intrinsic = 100.0 - 100.0 * math.exp(-0.05)
+        assert no_vol["stressed_pnl"] == pytest.approx(
+            10 * (forward_intrinsic - option.Price())
+        )
+
+
+class TestVaRConfidence:
+    """VaR uses the z-score of the confidence level actually requested."""
+
+    @pytest.fixture
+    def book(self):
+        system = TradingSystem()
+        desk, client = system.book("DESK"), system.book("CLIENT")
+        system.trade(desk, client, "X", 100, 10.0)
+        return desk
+
+    def test_non_tabulated_confidence(self, book):
+        result = risk.parametric_var(book, confidence=0.975)
+        assert result["z_score"] == pytest.approx(1.95996, abs=1e-4)
+        assert result["var"] > risk.parametric_var(book, confidence=0.95)["var"]
+        assert result["var"] < risk.parametric_var(book, confidence=0.99)["var"]
+
+    def test_expected_shortfall_exceeds_var(self, book):
+        for confidence in (0.5, 0.9, 0.975, 0.999):
+            result = risk.parametric_var(book, confidence=confidence)
+            assert result["expected_shortfall"] > result["var"]
+            # For a normal distribution ES is never far above VaR in the tail.
+            if confidence >= 0.9:
+                assert result["expected_shortfall"] < 1.5 * result["var"]
+
+    @pytest.mark.parametrize("confidence", [0.0, 1.0, 1.5, -0.1])
+    def test_invalid_confidence_rejected(self, book, confidence):
+        with pytest.raises(ValueError):
+            risk.parametric_var(book, confidence=confidence)
+
+    def test_report_keeps_explicit_zero_volatility(self, book):
+        assert risk.var_report(book, volatility=0.0)["volatility"] == 0.0

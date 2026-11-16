@@ -556,11 +556,96 @@ class TestInterestRateSwap:
         swap = InterestRateSwap()
         assert swap.Price() == swap.NPV()
 
-    def test_yield_to_maturity_alias(self):
-        """YieldToMaturity should return DiscountRate (for risk module)."""
+    def test_no_yield_to_maturity_alias(self):
+        """Swaps are driven by DiscountRate; there is no disconnected alias."""
+        assert not hasattr(InterestRateSwap(), "YieldToMaturity")
+
+    def test_floating_spread_adds_annuity(self):
+        """A spread over the index is worth spread/freq * Annuity * Notional."""
         swap = InterestRateSwap()
-        swap.DiscountRate.set(0.045)
-        assert swap.YieldToMaturity() == swap.DiscountRate()
+        base = swap.NPV()
+        swap.FloatingSpread.set(0.02)
+        expected = swap.Notional() * 0.02 / swap.Frequency() * swap.Annuity()
+        assert swap.NPV() - base == pytest.approx(expected)
+
+    def test_floating_fixing_affects_first_coupon(self):
+        """A fixing above the discount rate is worth the extra first coupon."""
+        swap = InterestRateSwap()  # discount 3%, quarterly, payer
+        assert swap.FloatingRate() == swap.DiscountRate()
+        assert swap.NPV() == pytest.approx(0.0, abs=1e-6)
+
+        swap.FloatingRate.set(0.10)
+        extra_coupon = swap.Notional() * (0.10 - 0.03) / 4
+        assert swap.NPV() == pytest.approx(extra_coupon / (1 + 0.03 / 4))
+
+    def test_par_rate_zeroes_npv_off_reset(self):
+        """ParSwapRate zeroes NPV even with a spread and an off-market fixing."""
+        swap = InterestRateSwap()
+        swap.FloatingRate.set(0.02)
+        swap.FloatingSpread.set(0.005)
+        swap.FixedRate.set(swap.ParSwapRate())
+        assert swap.NPV() == pytest.approx(0.0, abs=1e-6)
+
+
+class TestStockValuation:
+    """Stock exposes the Price/MarketValue that books and risk rely on."""
+
+    def test_price_and_market_value_are_spot(self):
+        stock = Stock()
+        stock.Spot.set(123.0)
+        assert stock.Price() == 123.0
+        assert stock.MarketValue() == 123.0
+
+
+class TestForwardGreeks:
+    """Analytic forward Greeks match finite differences of Value."""
+
+    @pytest.fixture
+    def forward(self):
+        fwd = Forward()
+        fwd.Spot.set(100.0)
+        fwd.Rate.set(0.05)
+        fwd.DividendYield.set(0.02)
+        fwd.StorageCost.set(0.03)
+        fwd.TimeToExpiry.set(2.0)
+        fwd.ContractPrice.set(100.0)
+        return fwd
+
+    @staticmethod
+    def _slope(fwd, accessor, h):
+        base = accessor()
+        accessor.set(base + h)
+        up = fwd.Value()
+        accessor.set(base - h)
+        down = fwd.Value()
+        accessor.set(base)
+        return (up - down) / (2 * h)
+
+    def test_delta_includes_storage_cost(self, forward):
+        assert forward.Delta() == pytest.approx(self._slope(forward, forward.Spot, 0.01))
+        assert forward.Delta() > 1.0  # storage cost exceeds dividend yield
+
+    def test_rho(self, forward):
+        expected = self._slope(forward, forward.Rate, 1e-5) * 0.01
+        assert forward.Rho() == pytest.approx(expected, rel=1e-6)
+        assert forward.Rho() > 0  # long forward gains when rates rise
+
+    def test_theta(self, forward):
+        expected = -self._slope(forward, forward.TimeToExpiry, 1e-5) / 365
+        assert forward.Theta() == pytest.approx(expected, rel=1e-6)
+
+    def test_at_market_forward_still_has_rho_and_theta(self):
+        fwd = Forward()
+        fwd.ContractPrice.set(fwd.ForwardPrice())
+        assert fwd.Value() == pytest.approx(0.0, abs=1e-9)
+        assert fwd.Rho() > 0
+        assert fwd.Theta() < 0
+
+    def test_short_forward_flips_sign(self, forward):
+        long_rho, long_delta = forward.Rho(), forward.Delta()
+        forward.IsLong.set(False)
+        assert forward.Rho() == pytest.approx(-long_rho)
+        assert forward.Delta() == pytest.approx(-long_delta)
 
     def test_fixed_leg_pv_calculation(self):
         """Fixed leg PV should equal fixed payment times annuity."""

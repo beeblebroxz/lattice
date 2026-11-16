@@ -18,14 +18,54 @@ Example:
     print(risk.delta(option))
 """
 
-from typing import Any
+from typing import Optional
 import dag
+
+# Size of the move that vega and rho are quoted against (1% = 0.01).
+ONE_PERCENT = 0.01
+ONE_BASIS_POINT = 0.0001
+ONE_DAY = 1 / 365
+
+# Inputs that carry an instrument's interest-rate level for DV01, in order of
+# preference: bonds are driven by yield, swaps by their discount rate.
+_DV01_INPUTS = ("YieldToMaturity", "DiscountRate")
+
+
+def value_output(instrument: dag.Model) -> Optional[str]:
+    """Name of the output that risk measures are taken on, or None.
+
+    ``Price`` when the instrument has one, otherwise ``MarketValue`` (forwards
+    and FX instruments are valued, not priced).
+    """
+    for name in ("Price", "MarketValue"):
+        if hasattr(instrument, name):
+            return name
+    return None
+
+
+def dv01_input(instrument: dag.Model) -> Optional[str]:
+    """Name of the rate input DV01 bumps on this instrument, or None."""
+    for name in _DV01_INPUTS:
+        if hasattr(instrument, name):
+            return name
+    return None
+
+
+def _output(instrument: dag.Model, output_name: Optional[str]) -> str:
+    if output_name is not None:
+        return output_name
+    name = value_output(instrument)
+    if name is None:
+        raise AttributeError(
+            f"{type(instrument).__name__} has neither Price nor MarketValue"
+        )
+    return name
 
 
 def sensitivity(
     instrument: dag.Model,
     input_name: str,
-    output_name: str = "Price",
+    output_name: Optional[str] = None,
     bump: float = 0.01,
     bump_type: str = "absolute",
 ) -> float:
@@ -36,7 +76,8 @@ def sensitivity(
     Args:
         instrument: Any dag.Model with overridable inputs
         input_name: Name of input to bump (e.g., "Spot", "Rate")
-        output_name: Name of output to measure (e.g., "Price", "TotalPnL")
+        output_name: Name of output to measure (e.g., "Price", "TotalPnL").
+            Defaults to Price, or MarketValue for instruments without a Price.
         bump: Size of bump
         bump_type: "absolute" (add bump) or "relative" (multiply by 1+bump)
 
@@ -48,7 +89,7 @@ def sensitivity(
     """
     # Get accessors
     input_accessor = getattr(instrument, input_name)
-    output_accessor = getattr(instrument, output_name)
+    output_accessor = getattr(instrument, _output(instrument, output_name))
 
     # Get base values
     base_input = input_accessor()
@@ -70,36 +111,42 @@ def sensitivity(
     return (bumped_output - base_output) / effective_bump
 
 
-def delta(instrument: dag.Model, bump: float = 0.01) -> float:
+def delta(
+    instrument: dag.Model, bump: float = 0.01, output_name: Optional[str] = None
+) -> float:
     """Compute delta: dPrice/dSpot.
 
     Delta measures how much the price changes for a $1 move in the underlying.
 
     Args:
-        instrument: Any dag.Model with Spot and Price
+        instrument: Any dag.Model with Spot and Price (or MarketValue)
         bump: Spot bump size (default $0.01)
+        output_name: Output to measure (default Price, else MarketValue)
 
     Returns:
         Delta value
     """
-    return sensitivity(instrument, "Spot", "Price", bump=bump)
+    return sensitivity(instrument, "Spot", output_name, bump=bump)
 
 
-def gamma(instrument: dag.Model, bump: float = 0.01) -> float:
+def gamma(
+    instrument: dag.Model, bump: float = 0.01, output_name: Optional[str] = None
+) -> float:
     """Compute gamma: d²Price/dSpot² using central difference.
 
     Gamma measures the rate of change of delta. Uses central difference
     for better accuracy: (f(x+h) - 2*f(x) + f(x-h)) / h²
 
     Args:
-        instrument: Any dag.Model with Spot and Price
+        instrument: Any dag.Model with Spot and Price (or MarketValue)
         bump: Spot bump size (default $0.01)
+        output_name: Output to measure (default Price, else MarketValue)
 
     Returns:
         Gamma value
     """
     spot_accessor = getattr(instrument, "Spot")
-    price_accessor = getattr(instrument, "Price")
+    price_accessor = getattr(instrument, _output(instrument, output_name))
 
     base_spot = spot_accessor()
     base_price = price_accessor()
@@ -118,7 +165,9 @@ def gamma(instrument: dag.Model, bump: float = 0.01) -> float:
     return (price_up - 2 * base_price + price_down) / (bump * bump)
 
 
-def vega(instrument: dag.Model, bump: float = 0.01) -> float:
+def vega(
+    instrument: dag.Model, bump: float = 0.01, output_name: Optional[str] = None
+) -> float:
     """Compute vega: price change per 1% vol move.
 
     Vega measures price sensitivity to implied volatility.
@@ -126,15 +175,16 @@ def vega(instrument: dag.Model, bump: float = 0.01) -> float:
     matching the convention used by closed-form Black-Scholes.
 
     Args:
-        instrument: Any dag.Model with Volatility and Price
-        bump: Volatility bump size (default 0.01 = 1%)
+        instrument: Any dag.Model with Volatility and Price (or MarketValue)
+        bump: Volatility bump used to estimate the slope (default 0.01). The
+            result is always quoted per 1%, whatever the bump.
+        output_name: Output to measure (default Price, else MarketValue)
 
     Returns:
         Vega value (price change for a 1% vol move)
     """
-    # sensitivity() returns dP/dvol, multiply by bump to get price change
-    raw_sens = sensitivity(instrument, "Volatility", "Price", bump=bump)
-    return raw_sens * bump
+    raw_sens = sensitivity(instrument, "Volatility", output_name, bump=bump)
+    return raw_sens * ONE_PERCENT
 
 
 def theta(instrument: dag.Model, bump: float = 1 / 365) -> float:
@@ -143,17 +193,31 @@ def theta(instrument: dag.Model, bump: float = 1 / 365) -> float:
     Theta measures how much value the instrument loses per day.
     Negative theta means the instrument loses value as time passes.
 
+    Time is rolled forward (TimeToExpiry is bumped down), so near expiry this
+    is the decay the instrument actually has left, and at expiry it is zero.
+
     Args:
-        instrument: Any dag.Model with TimeToExpiry and Price
-        bump: Time bump size (default 1 day = 1/365 years)
+        instrument: Any dag.Model with TimeToExpiry and Price (or MarketValue)
+        bump: Time step used to estimate the slope (default 1 day = 1/365
+            years). The result is always quoted per day.
 
     Returns:
         Theta value (price change per day, typically negative)
     """
-    # As time passes, TimeToExpiry decreases, so we negate and scale
-    # sensitivity() returns dP/dT, we want price change per day
-    raw_sens = sensitivity(instrument, "TimeToExpiry", "Price", bump=bump)
-    return -raw_sens * bump
+    time_accessor = getattr(instrument, "TimeToExpiry")
+    price_accessor = getattr(instrument, _output(instrument, None))
+
+    time_left = time_accessor()
+    if time_left <= 0:
+        return 0.0
+    step = min(bump, time_left)
+    base_price = price_accessor()
+
+    with dag.scenario():
+        time_accessor.override(time_left - step)
+        later_price = price_accessor()
+
+    return (later_price - base_price) / step * ONE_DAY
 
 
 def rho(instrument: dag.Model, bump: float = 0.01) -> float:
@@ -164,15 +228,15 @@ def rho(instrument: dag.Model, bump: float = 0.01) -> float:
     matching the convention used by closed-form Black-Scholes.
 
     Args:
-        instrument: Any dag.Model with Rate and Price
-        bump: Rate bump size (default 0.01 = 1%)
+        instrument: Any dag.Model with Rate and Price (or MarketValue)
+        bump: Rate bump used to estimate the slope (default 0.01). The result
+            is always quoted per 1%, whatever the bump.
 
     Returns:
         Rho value (price change for a 1% rate move)
     """
-    # sensitivity() returns dP/dr, multiply by bump to get price change
-    raw_sens = sensitivity(instrument, "Rate", "Price", bump=bump)
-    return raw_sens * bump
+    raw_sens = sensitivity(instrument, "Rate", bump=bump)
+    return raw_sens * ONE_PERCENT
 
 
 def dv01(instrument: dag.Model, bump: float = 0.0001) -> float:
@@ -181,13 +245,26 @@ def dv01(instrument: dag.Model, bump: float = 0.0001) -> float:
     DV01 measures how much a bond's price changes for a 1bp yield move.
     Also known as "dollar duration" or "price value of a basis point".
 
+    The rate bumped is YieldToMaturity (bonds) or, failing that, DiscountRate
+    (swaps).
+
     Args:
-        instrument: Any dag.Model with YieldToMaturity and Price
-        bump: Yield bump size (default 0.0001 = 1bp)
+        instrument: Any dag.Model with YieldToMaturity or DiscountRate, and
+            Price (or MarketValue)
+        bump: Rate bump used to estimate the slope (default 0.0001 = 1bp). The
+            result is always quoted per 1bp.
 
     Returns:
         DV01 value (absolute price change per 1bp)
+
+    Raises:
+        AttributeError: If the instrument has no rate input to bump
     """
+    rate_input = dv01_input(instrument)
+    if rate_input is None:
+        raise AttributeError(
+            f"{type(instrument).__name__} has no YieldToMaturity or DiscountRate"
+        )
     # DV01 is typically reported as absolute value
-    sens = sensitivity(instrument, "YieldToMaturity", "Price", bump=bump)
-    return abs(sens * bump)
+    sens = sensitivity(instrument, rate_input, bump=bump)
+    return abs(sens * ONE_BASIS_POINT)

@@ -22,7 +22,9 @@ import logging
 from typing import Dict, Any, Optional
 import dag
 
-from .sensitivities import delta, gamma, vega, theta, rho, dv01
+from .sensitivities import (
+    delta, gamma, vega, theta, rho, dv01, dv01_input, value_output,
+)
 from .shocks import shocked_value
 
 logger = logging.getLogger(__name__)
@@ -98,7 +100,8 @@ class RiskEngine:
         compute_greeks_distributed() for parallel, multi-process execution.
 
         Args:
-            bump: Bump size for numerical differentiation
+            bump: Bump size for numerical differentiation of delta, gamma,
+                vega and rho. Vega and rho are still quoted per 1%.
 
         Returns:
             dict mapping instrument name to dict of Greeks
@@ -107,9 +110,11 @@ class RiskEngine:
 
         for name, inst in self._instruments.items():
             results[name] = {}
+            # Greeks are taken on Price, or MarketValue where there is no Price
+            priced = value_output(inst) is not None
 
             # Delta and Gamma (require Spot)
-            if hasattr(inst, "Spot") and hasattr(inst, "Price"):
+            if priced and hasattr(inst, "Spot"):
                 try:
                     results[name]["delta"] = delta(inst, bump)
                     results[name]["gamma"] = gamma(inst, bump)
@@ -117,28 +122,28 @@ class RiskEngine:
                     logger.warning("Failed to compute delta/gamma for %s: %s", name, e)
 
             # Vega (requires Volatility)
-            if hasattr(inst, "Volatility") and hasattr(inst, "Price"):
+            if priced and hasattr(inst, "Volatility"):
                 try:
                     results[name]["vega"] = vega(inst, bump)
                 except Exception as e:
                     logger.warning("Failed to compute vega for %s: %s", name, e)
 
             # Theta (requires TimeToExpiry)
-            if hasattr(inst, "TimeToExpiry") and hasattr(inst, "Price"):
+            if priced and hasattr(inst, "TimeToExpiry"):
                 try:
                     results[name]["theta"] = theta(inst)
                 except Exception as e:
                     logger.warning("Failed to compute theta for %s: %s", name, e)
 
             # Rho (requires Rate)
-            if hasattr(inst, "Rate") and hasattr(inst, "Price"):
+            if priced and hasattr(inst, "Rate"):
                 try:
                     results[name]["rho"] = rho(inst, bump)
                 except Exception as e:
                     logger.warning("Failed to compute rho for %s: %s", name, e)
 
-            # DV01 (requires YieldToMaturity)
-            if hasattr(inst, "YieldToMaturity") and hasattr(inst, "Price"):
+            # DV01 (requires YieldToMaturity, or DiscountRate for swaps)
+            if priced and dv01_input(inst) is not None:
                 try:
                     results[name]["dv01"] = dv01(inst)
                 except Exception as e:
@@ -172,12 +177,13 @@ class RiskEngine:
         results = {}
 
         for name, inst in self._instruments.items():
-            # Get base price
-            if hasattr(inst, "Price"):
-                base_price = inst.Price()
-            else:
-                results[name] = {"error": "No Price attribute"}
+            # Value on Price, or MarketValue where there is no Price
+            output = value_output(inst)
+            if output is None:
+                results[name] = {"error": "No Price or MarketValue attribute"}
                 continue
+            value = getattr(inst, output)
+            base_price = value()
 
             # Apply shocks
             with dag.scenario():
@@ -187,7 +193,7 @@ class RiskEngine:
                         current_value = accessor()
                         accessor.override(shocked_value(input_name, current_value, shock))
 
-                stressed_price = inst.Price()
+                stressed_price = value()
 
             results[name] = {
                 "base_price": base_price,
@@ -238,7 +244,9 @@ class RiskEngine:
             task_queue: Task queue name
 
         Returns:
-            dict mapping instrument name to dict of Greeks
+            dict mapping instrument name to dict of Greeks. If a worker
+            could not load an instrument or a Greek failed, the message is
+            logged and returned under that instrument's ``"error"`` key.
 
         Example:
             import asyncio
@@ -269,6 +277,10 @@ class RiskEngine:
             for key in ["delta", "gamma", "vega", "theta", "rho", "dv01"]:
                 if key in result and result[key] is not None:
                     output[name][key] = result[key]
+            error = result.get("error")
+            if error:
+                logger.warning("Distributed Greeks for %s: %s", name, error)
+                output[name]["error"] = error
 
         return output
 

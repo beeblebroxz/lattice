@@ -30,7 +30,8 @@ def create_swap(
     swap.Maturity.set(maturity)
     swap.IsPayer.set(is_payer)
     swap.DiscountRate.set(discount_rate)
-    swap.FloatingRate.set(0.03)
+    # FloatingRate is left at its default (the discount rate): the swap is
+    # valued on a reset date, so the par rate equals the discount rate.
     return swap
 
 

@@ -26,18 +26,27 @@ print(f"Rho:   {risk.rho(option):.4f}")
 
 | Function | Description |
 |----------|-------------|
-| `risk.delta(inst, bump=0.01)` | dPrice/dSpot via central difference |
+| `risk.delta(inst, bump=0.01)` | dPrice/dSpot |
 | `risk.gamma(inst, bump=0.01)` | d²Price/dSpot² |
 | `risk.vega(inst, bump=0.01)` | Price change per 1% vol move |
-| `risk.theta(inst, days=1)` | Price change per day |
-| `risk.rho(inst, bump=0.0001)` | Price change per 1bp rate move |
-| `risk.dv01(bond, bump=0.0001)` | Dollar value of 1bp yield change |
+| `risk.theta(inst, bump=1/365)` | Price change over the next day (zero at expiry) |
+| `risk.rho(inst, bump=0.01)` | Price change per 1% rate move |
+| `risk.dv01(inst, bump=0.0001)` | Dollar value of 1bp: bumps `YieldToMaturity` (bonds) or `DiscountRate` (swaps) |
+
+`bump` only sets the step used to estimate the slope. Vega and rho are always
+quoted per 1%, theta per day and DV01 per basis point, whatever the bump.
+
+All of these measure `Price`, or `MarketValue` for instruments that have no
+`Price` (forwards, futures, FX), so they work on every lattice instrument.
 
 ### General Sensitivity
 
 ```python
 # Sensitivity of any output to any input
 sens = risk.sensitivity(option, "Spot", "Price", bump=0.01)
+
+# Output defaults to Price (or MarketValue if there is no Price)
+sens = risk.sensitivity(option, "Spot", bump=0.01)
 
 # Custom outputs
 delta_sens = risk.sensitivity(option, "Spot", "Delta", bump=0.01)
@@ -47,7 +56,7 @@ delta_sens = risk.sensitivity(option, "Spot", "Delta", bump=0.01)
 - `inst` - The instrument
 - `input_name` - Name of input field to bump
 - `output_name` - Name of output field to measure
-- `bump` - Bump size (relative for prices, absolute for rates)
+- `bump` - Bump size, added to the input (pass `bump_type="relative"` to scale it instead)
 
 ## Portfolio Risk
 
@@ -79,7 +88,7 @@ print(f"Short Exposure: ${exposure['short_exposure']:,.2f}")
 
 | Function | Description |
 |----------|-------------|
-| `risk.portfolio_delta(book)` | Aggregate delta exposure |
+| `risk.portfolio_delta(book)` | P&L change per $1 move in every underlying: instrument `Spot` for linked positions, `MarketPrice` for price-only ones |
 | `risk.portfolio_exposure(book)` | Exposure breakdown dict |
 
 ## Stress Testing
@@ -99,9 +108,10 @@ print(f"P&L Impact: ${result['pnl_impact']:,.2f}")
 Apply spot/vol/rate shocks to a book and measure the P&L impact.
 
 For positions linked to a live instrument, the shocks override the instrument's
-`Spot`/`Volatility`/`Rate` and the book reprices reactively. For price-only
-positions, only `spot_shock` applies (to `MarketPrice`); vol/rate are reported
-under `skipped_shocks`.
+`Spot`/`Volatility` and its rate input (`Rate` for options and forwards,
+`YieldToMaturity` for bonds, `DiscountRate` for swaps) and the book reprices
+reactively. For price-only positions, only `spot_shock` applies (to
+`MarketPrice`); vol/rate are reported under `skipped_shocks`.
 
 **Shock convention:** `spot_shock` and `vol_shock` are relative (`× (1+s)`);
 `rate_shock` is absolute (`+s`, i.e. basis points).
@@ -199,7 +209,7 @@ print(f"10-day 99% VaR: ${var_10d['var']:,.2f}")
 
 | Function | Description |
 |----------|-------------|
-| `risk.parametric_var(book, confidence, holding_period)` | Compute VaR |
+| `risk.parametric_var(book, confidence, holding_period)` | Compute VaR. `confidence` is any value strictly between 0 and 1 |
 | `risk.var_contribution(book)` | VaR contribution by position |
 | `risk.var_report(book)` | Full report with multiple scenarios |
 

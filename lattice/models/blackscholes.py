@@ -5,7 +5,7 @@ Provides pricing and Greeks for European vanilla options.
 """
 
 import math
-from typing import Literal
+from typing import Literal, Optional
 
 
 def norm_cdf(x: float) -> float:
@@ -18,6 +18,35 @@ def norm_pdf(x: float) -> float:
     return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
 
 
+def _degenerate_d(
+    spot: float,
+    strike: float,
+    rate: float,
+    dividend: float,
+    volatility: float,
+    time_to_expiry: float,
+) -> Optional[float]:
+    """Limit of d1 and d2 where the usual formula is undefined, else None.
+
+    With no volatility, or a non-positive spot or strike, the option is
+    certain to finish in or out of the money, so d1 = d2 = +/-inf. Feeding
+    that into the standard formulas gives the discounted forward intrinsic
+    value, a step delta, and zero gamma and vega.
+    """
+    if spot <= 0:
+        return -math.inf
+    if strike <= 0:
+        return math.inf
+    if volatility <= 0:
+        forward = spot * math.exp((rate - dividend) * time_to_expiry)
+        if forward > strike:
+            return math.inf
+        if forward < strike:
+            return -math.inf
+        return 0.0
+    return None
+
+
 def _d1(
     spot: float,
     strike: float,
@@ -27,8 +56,11 @@ def _d1(
     time_to_expiry: float,
 ) -> float:
     """Calculate d1 parameter for Black-Scholes."""
-    if time_to_expiry <= 0 or volatility <= 0:
+    if time_to_expiry <= 0:
         return 0.0
+    degenerate = _degenerate_d(spot, strike, rate, dividend, volatility, time_to_expiry)
+    if degenerate is not None:
+        return degenerate
     return (
         math.log(spot / strike)
         + (rate - dividend + 0.5 * volatility * volatility) * time_to_expiry
@@ -44,8 +76,11 @@ def _d2(
     time_to_expiry: float,
 ) -> float:
     """Calculate d2 parameter for Black-Scholes."""
-    if time_to_expiry <= 0 or volatility <= 0:
+    if time_to_expiry <= 0:
         return 0.0
+    degenerate = _degenerate_d(spot, strike, rate, dividend, volatility, time_to_expiry)
+    if degenerate is not None:
+        return degenerate
     return _d1(spot, strike, rate, dividend, volatility, time_to_expiry) - volatility * math.sqrt(time_to_expiry)
 
 
@@ -142,7 +177,7 @@ def black_scholes_gamma(
     Returns:
         Gamma (always positive)
     """
-    if time_to_expiry <= 0 or volatility <= 0:
+    if time_to_expiry <= 0 or volatility <= 0 or spot <= 0 or strike <= 0:
         return 0.0
 
     d1 = _d1(spot, strike, rate, dividend, volatility, time_to_expiry)

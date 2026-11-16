@@ -140,12 +140,17 @@ class Forward(Instrument):
         """
         Delta - sensitivity of forward value to spot price.
 
-        For a forward: Delta = e^(-q * T) * sign
+        V = S * e^((b - r) * T) - K * e^(-r * T), so
+        Delta = e^((b - r) * T) * size * sign
+
+        b - r is storage cost minus dividend yield, so with no storage cost
+        this is the familiar e^(-q * T).
         """
-        q = self.DividendYield()
+        b = self.CostOfCarry()
+        r = self.Rate()
         T = self.TimeToExpiry()
         sign = 1 if self.IsLong() else -1
-        return math.exp(-q * T) * sign * self.ContractSize()
+        return math.exp((b - r) * T) * sign * self.ContractSize()
 
     @dag.computed
     def Gamma(self) -> float:
@@ -161,45 +166,35 @@ class Forward(Instrument):
         """
         Theta - time decay per day.
 
-        For a forward contract with no optionality.
+        V = S * e^((b - r) * T) - K * e^(-r * T), so
+        dV/dT = S * (b - r) * e^((b - r) * T) + r * K * e^(-r * T)
+        and theta is minus that, per day (time to expiry falls as time passes).
         """
-        # dV/dT = S * b * e^((b-r)*T) for forward price
-        # Simplified: negative of daily carry cost
         S = self.Spot()
         b = self.CostOfCarry()
         r = self.Rate()
         T = self.TimeToExpiry()
+        K = self.ContractPrice()
         sign = 1 if self.IsLong() else -1
 
-        # Value decay per year
-        annual_theta = -S * (b - r) * math.exp((b - r) * T)
-        # Convert to per day
-        return annual_theta / 365.0 * sign * self.ContractSize()
+        dv_dt = S * (b - r) * math.exp((b - r) * T) + r * K * math.exp(-r * T)
+        return -dv_dt / 365.0 * sign * self.ContractSize()
 
     @dag.computed
     def Rho(self) -> float:
         """
         Rho - sensitivity to interest rate (per 1% change).
 
-        For a forward: affects both forward price and discounting.
+        V = S * e^((b - r) * T) - K * e^(-r * T). The first term does not
+        depend on r (b - r is storage cost minus dividend yield), so
+        dV/dr = T * K * e^(-r * T).
         """
-        # Approximate via finite difference
         r = self.Rate()
         T = self.TimeToExpiry()
-        S = self.Spot()
-        b = self.CostOfCarry()
         K = self.ContractPrice()
         sign = 1 if self.IsLong() else -1
-        size = self.ContractSize()
 
-        # Sensitivity: T * V + S * T * e^((b-r)*T)
-        F = S * math.exp(b * T)
-        df = math.exp(-r * T)
-        value = (F - K) * df * size * sign
-
-        # dV/dr per 1% = T * (K - F) * e^(-r*T) + T * S * e^(b*T) * e^(-r*T)
-        # Simplified approximation:
-        return -T * value * 0.01
+        return T * K * math.exp(-r * T) * 0.01 * sign * self.ContractSize()
 
     # ==================== Instrument Interface ====================
 

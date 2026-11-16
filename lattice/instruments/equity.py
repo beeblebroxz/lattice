@@ -54,6 +54,16 @@ class Stock(Instrument):
     # ==================== Computed Values ====================
 
     @dag.computed
+    def Price(self) -> float:
+        """Price of one share: the spot price."""
+        return self.Spot()
+
+    @dag.computed
+    def MarketValue(self) -> float:
+        """Market value of one share (same as Price)."""
+        return self.Price()
+
+    @dag.computed
     def ForwardPrice(self) -> float:
         """
         Forward price for delivery at TimeToExpiry.

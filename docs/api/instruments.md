@@ -78,6 +78,7 @@ print(f"Cost of carry: ${stock.CarryCost():.2f}")
 
 | Field | Description |
 |-------|-------------|
+| `Price()` / `MarketValue()` | Value of one share: the spot price |
 | `ForwardPrice()` | F = S·e^((r−q)·T) |
 | `DividendPV()` | PV of dividends over the horizon |
 | `CarryCost()` | Forward minus spot (financing − dividends) |
@@ -157,9 +158,9 @@ print(f"DV01: ${swap.DV01():,.2f}")
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `FloatingRate` | float | 0.025 | Current floating rate |
-| `DiscountRate` | float | 0.03 | Discount rate for PV |
-| `FloatingSpread` | float | 0.0 | Spread over float index |
+| `FloatingRate` | float | `DiscountRate` | Floating rate already fixed for the current period. Affects the next coupon only |
+| `DiscountRate` | float | 0.03 | Discount rate for PV; the rate that DV01 and rate stresses move |
+| `FloatingSpread` | float | 0.0 | Spread over the floating index, paid every period |
 
 ### Outputs
 
@@ -172,6 +173,11 @@ print(f"DV01: ${swap.DV01():,.2f}")
 | `DV01()` | Dollar value of 1bp rate move |
 | `PV01()` | NPV change per 1bp fixed rate change |
 | `Annuity()` | Sum of discount factors |
+
+The floating leg is valued as a floating rate note less its principal:
+`Notional × [(1 + FloatingRate/f) × DF₁ − DFₙ] + Notional × FloatingSpread/f × Annuity`.
+With `FloatingRate` left at its default (equal to `DiscountRate`, i.e. valuing
+on a reset date) and no spread, this is the familiar `Notional × (1 − DFₙ)`.
 
 ## Forward
 

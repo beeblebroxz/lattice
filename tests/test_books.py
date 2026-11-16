@@ -531,3 +531,179 @@ class TestScenarioAnalysis:
 
         # Back to normal
         assert mm.TotalPnL() == base_pnl
+
+
+class TestBookStaysCurrent:
+    """Book values follow the position set, even after they have been read."""
+
+    @pytest.fixture
+    def system(self):
+        system = TradingSystem()
+        system.book("A")
+        system.book("B")
+        system.book("C")
+        return system
+
+    def test_new_position_after_read(self, system):
+        a, b = system.get_book("A"), system.get_book("B")
+        system.trade(a, b, "X", 100, 10.0)
+        assert a.NumPositions() == 1
+        assert a.GrossExposure() == 1000.0
+
+        system.trade(a, b, "Y", 10, 5.0)
+        assert a.NumPositions() == 2
+        assert a.GrossExposure() == 1050.0
+
+        system.set_market_price("Y", 6.0)
+        assert a.TotalPnL() == pytest.approx(10.0)
+
+    def test_empty_book_read_before_first_trade(self, system):
+        a, b = system.get_book("A"), system.get_book("B")
+        assert a.NumPositions() == 0
+        assert a.TotalPnL() == 0.0
+
+        system.trade(a, b, "X", 100, 10.0)
+        system.set_market_price("X", 11.0)
+        assert a.NumPositions() == 1
+        assert a.TotalPnL() == pytest.approx(100.0)
+
+    def test_close_and_reopen(self, system):
+        a, b = system.get_book("A"), system.get_book("B")
+        system.trade(a, b, "X", 100, 10.0)
+        assert a.NumPositions() == 1
+
+        system.trade(b, a, "X", 100, 10.0)
+        assert a.NumPositions() == 0
+        assert a.Positions() == []
+
+        system.trade(a, b, "X", 50, 20.0)
+        assert a.NumPositions() == 1
+        assert a.Positions()[0].AvgPrice() == 20.0
+
+    def test_books_do_not_share_positions(self):
+        one, two = Book(), Book()
+        one._set_positions([Position()])
+        assert len(one.AllPositions()) == 1
+        assert two.AllPositions() == []
+
+
+class TestRealizedPnL:
+    """Reducing, closing and flipping a position realizes P&L."""
+
+    @pytest.fixture
+    def system(self):
+        system = TradingSystem()
+        for book_id in ("A", "B", "C"):
+            system.book(book_id)
+        return system
+
+    def test_round_trip(self, system):
+        a, b = system.get_book("A"), system.get_book("B")
+        system.trade(a, b, "X", 100, 10.0)
+        system.trade(b, a, "X", 100, 12.0)
+
+        assert a.RealizedPnL() == pytest.approx(200.0)
+        assert a.UnrealizedPnL() == 0.0
+        assert a.TotalPnL() == pytest.approx(200.0)
+        assert b.TotalPnL() == pytest.approx(-200.0)
+
+    def test_partial_close_keeps_average_price(self, system):
+        a, b = system.get_book("A"), system.get_book("B")
+        system.trade(a, b, "X", 100, 10.0)
+        system.trade(b, a, "X", 40, 12.0)
+        system.set_market_price("X", 12.0)
+
+        pos = system.positions_for(a)[0]
+        assert pos.Quantity() == 60
+        assert pos.AvgPrice() == 10.0
+        assert pos.RealizedPnL() == pytest.approx(80.0)
+        assert pos.UnrealizedPnL() == pytest.approx(120.0)
+        assert pos.TotalPnL() == pytest.approx(200.0)
+        assert a.TotalPnL() == pytest.approx(200.0)
+
+    def test_flip_through_zero(self, system):
+        a, b = system.get_book("A"), system.get_book("B")
+        system.trade(a, b, "X", 100, 10.0)
+        system.trade(b, a, "X", 150, 12.0)
+
+        pos = system.positions_for(a)[0]
+        assert pos.Quantity() == -50
+        assert pos.AvgPrice() == 12.0
+        assert pos.RealizedPnL() == pytest.approx(200.0)
+        assert pos.UnrealizedPnL() == 0.0
+
+    def test_short_side_realizes_with_opposite_sign(self, system):
+        a, b = system.get_book("A"), system.get_book("B")
+        system.trade(b, a, "X", 100, 10.0)  # A is short 100 at 10
+        system.trade(a, b, "X", 100, 8.0)   # A buys back at 8
+        assert a.RealizedPnL() == pytest.approx(200.0)
+
+    def test_adding_realizes_nothing(self, system):
+        a, b = system.get_book("A"), system.get_book("B")
+        system.trade(a, b, "X", 100, 10.0)
+        system.trade(a, b, "X", 100, 12.0)
+        assert a.RealizedPnL() == 0.0
+        assert system.positions_for(a)[0].AvgPrice() == 11.0
+
+    def test_system_total_is_zero_sum(self, system):
+        a, b, c = (system.get_book(k) for k in ("A", "B", "C"))
+        system.trade(a, b, "X", 100, 10.0)
+        system.trade(c, a, "X", 100, 12.0)
+        system.set_market_price("X", 15.0)
+
+        assert a.TotalPnL() == pytest.approx(200.0)
+        assert b.TotalPnL() == pytest.approx(-500.0)
+        assert c.TotalPnL() == pytest.approx(300.0)
+        assert system.total_pnl() == pytest.approx(0.0)
+
+
+class TestTradeValidation:
+    """Invalid trades are rejected before they touch any state."""
+
+    @pytest.fixture
+    def system(self):
+        system = TradingSystem()
+        system.book("A")
+        system.book("B")
+        return system
+
+    @pytest.mark.parametrize("kwargs", [
+        dict(symbol="X", quantity=0, price=1.0),
+        dict(symbol="X", quantity=-5, price=1.0),
+        dict(symbol="X", quantity=1.5, price=1.0),
+        dict(symbol="X", quantity=True, price=1.0),
+        dict(symbol="X", quantity=1, price=float("nan")),
+        dict(symbol="X", quantity=1, price=float("inf")),
+        dict(symbol="X", quantity=1, price="1.0"),
+        dict(symbol="", quantity=1, price=1.0),
+    ])
+    def test_bad_trade_rejected_without_side_effects(self, system, kwargs):
+        a, b = system.get_book("A"), system.get_book("B")
+        with pytest.raises(ValueError):
+            system.trade(a, b, **kwargs)
+
+        assert system.num_trades == 0
+        assert system.positions_for(a) == []
+        # The next valid trade still gets the first id.
+        assert system.trade(a, b, "X", 1, 1.0).TradeId() == 1
+
+    def test_self_trade_rejected(self, system):
+        a, b = system.get_book("A"), system.get_book("B")
+        system.trade(a, b, "X", 100, 10.0)
+        with pytest.raises(ValueError, match="same book"):
+            system.trade(a, a, "X", 50, 20.0)
+        assert system.positions_for(a)[0].AvgPrice() == 10.0
+
+    def test_foreign_book_rejected(self, system):
+        a = system.get_book("A")
+        outsider = TradingSystem().book("Z")
+        with pytest.raises(ValueError, match="does not belong"):
+            system.trade(a, outsider, "X", 1, 1.0)
+        with pytest.raises(ValueError, match="does not belong"):
+            system.trade(Book(), a, "X", 1, 1.0)
+
+    def test_negative_price_allowed(self, system):
+        """Spreads and swaps can trade at negative prices."""
+        a, b = system.get_book("A"), system.get_book("B")
+        system.trade(a, b, "SPREAD", 10, -2.5)
+        assert system.positions_for(a)[0].AvgPrice() == -2.5
