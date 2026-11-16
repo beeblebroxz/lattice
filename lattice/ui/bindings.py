@@ -36,10 +36,17 @@ class Binding:
 
     @property
     def node_path(self) -> str:
-        """Get the node path for this binding."""
-        # The computed_func has __self__ (model instance) and __name__
-        model = getattr(self.computed_func, "__self__", None)
-        name = getattr(self.computed_func, "__name__", "unknown")
+        """Get the node path for this binding, e.g. "option.Spot".
+
+        The model part is the name the model was registered under (set by
+        DagApp.register), falling back to its class name.
+        """
+        # A dag accessor (option.Spot) carries its model and its descriptor.
+        model = getattr(self.computed_func, "_obj", None)
+        descriptor = getattr(self.computed_func, "_descriptor", None)
+        name = getattr(descriptor, "name", None)
+        if name is None:
+            name = getattr(self.computed_func, "__name__", "unknown")
         if model is not None:
             model_name = getattr(model, "_name", None) or type(model).__name__
             return f"{model_name}.{name}"

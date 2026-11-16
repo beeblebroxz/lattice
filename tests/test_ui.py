@@ -366,3 +366,205 @@ class TestFormatting:
         session = Session()
         formatted = session._format_value(None, "$,.2f")
         assert formatted is None
+
+
+class TestNodePath:
+    """A binding knows which node it points at."""
+
+    def test_node_path_uses_registered_name(self):
+        option = VanillaOption()
+        app = DagApp("Pricer")
+        app.register(option, name="option")
+        assert bind(option.Spot).node_path == "option.Spot"
+        assert bind(option.Price).node_path == "option.Price"
+
+    def test_node_path_falls_back_to_class_name(self):
+        assert bind(VanillaOption().Spot).node_path == "VanillaOption.Spot"
+
+
+class TestJsonSafety:
+    """Messages are always valid JSON, even for NaN and infinity."""
+
+    def test_non_finite_values_become_null(self):
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            data = json.loads(ValueMessage(node_path="o.Price", value=bad).to_json())
+            assert data["value"] is None
+
+    def test_nested_non_finite_values(self):
+        msg = ValueMessage(node_path="o.Curve", value=[1.0, float("nan"), {"x": float("inf")}])
+        assert json.loads(msg.to_json())["value"] == [1.0, None, {"x": None}]
+
+    def test_finite_values_untouched(self):
+        assert json.loads(ValueMessage(node_path="o.Price", value=1.5).to_json())["value"] == 1.5
+
+
+def _free_port():
+    import socket
+
+    with socket.socket() as sock:
+        sock.bind(("localhost", 0))
+        return sock.getsockname()[1]
+
+
+def _exchange(app, frames, settle=0.3):
+    """Run the app's server, send raw frames, and return every reply.
+
+    Frames are sent as raw text so that deliberately malformed values (NaN)
+    reach the server exactly as a browser could send them.
+    """
+    import asyncio
+    import aiohttp
+
+    async def run():
+        port = _free_port()
+        await app.start_async(port=port)
+        replies = []
+        try:
+            async with aiohttp.ClientSession() as http:
+                async with http.ws_connect(f"http://localhost:{port}/ws") as ws:
+                    for frame in frames:
+                        await ws.send_str(frame)
+                    while True:
+                        try:
+                            msg = await asyncio.wait_for(ws.receive(), timeout=settle)
+                        except asyncio.TimeoutError:
+                            break
+                        if msg.type != aiohttp.WSMsgType.TEXT:
+                            break
+                        replies.append(json.loads(msg.data))
+        finally:
+            await app.stop_async()
+        return replies
+
+    return asyncio.run(run())
+
+
+def _set(path, value):
+    return json.dumps({"type": "set", "node_path": path, "value": value})
+
+
+class TestServerInputValidation:
+    """Values from the browser cannot corrupt the shared model."""
+
+    @pytest.fixture
+    def option_app(self):
+        option = VanillaOption()
+        app = DagApp("Pricer")
+        app.register(option, name="option")
+        return app, option
+
+    @staticmethod
+    def _errors(replies):
+        return [r for r in replies if r["type"] == "error"]
+
+    def test_string_for_a_number_is_rejected(self, option_app):
+        app, option = option_app
+        replies = _exchange(app, [_set("option.Spot", "abc")])
+
+        errors = self._errors(replies)
+        assert len(errors) == 1
+        assert errors[0]["node_path"] == "option.Spot"
+        assert "must be a number" in errors[0]["error"]
+        assert option.Spot() == 100.0
+        assert option.Price() > 0
+
+    def test_nan_is_rejected(self, option_app):
+        app, option = option_app
+        frame = '{"type": "set", "node_path": "option.Strike", "value": NaN}'
+        replies = _exchange(app, [frame])
+
+        assert "finite" in self._errors(replies)[0]["error"]
+        assert option.Strike() == 100.0
+
+    def test_number_for_a_flag_is_rejected(self, option_app):
+        app, option = option_app
+        replies = _exchange(app, [_set("option.IsCall", 0)])
+        assert "true or false" in self._errors(replies)[0]["error"]
+        assert option.IsCall() is True
+
+    def test_valid_values_are_applied(self, option_app):
+        app, option = option_app
+        replies = _exchange(app, [
+            _set("option.Spot", 105),          # int for a float input
+            _set("option.IsCall", False),
+            _set("option.Underlying", "AAPL"),
+        ])
+
+        assert self._errors(replies) == []
+        assert option.Spot() == 105.0
+        assert isinstance(option.Spot(), float)
+        assert option.IsCall() is False
+        assert option.Underlying() == "AAPL"
+
+    def test_whole_number_inputs(self):
+        from lattice import InterestRateSwap
+
+        swap = InterestRateSwap()
+        app = DagApp("Swap")
+        app.register(swap, name="swap")
+
+        replies = _exchange(app, [_set("swap.Frequency", 2.5)])
+        assert "whole number" in self._errors(replies)[0]["error"]
+        assert swap.Frequency() == 4
+
+        _exchange(app, [_set("swap.Frequency", 2.0)])
+        assert swap.Frequency() == 2
+        assert isinstance(swap.Frequency(), int)
+
+    def test_override_reports_unsupported(self, option_app):
+        app, option = option_app
+        replies = _exchange(app, [
+            json.dumps({"type": "override", "node_path": "option.Spot", "value": 120.0}),
+            json.dumps({"type": "clear_override", "node_path": "option.Spot"}),
+        ])
+
+        errors = self._errors(replies)
+        assert len(errors) == 2
+        assert all("not supported" in e["error"] for e in errors)
+        assert option.Spot() == 100.0
+
+
+class TestServerLayout:
+    """Sections added to a DagApp reach the browser."""
+
+    def test_layout_labels_and_formats(self):
+        option = VanillaOption()
+        option.Spot.set(105.0)
+        app = DagApp("Option Pricer")
+        app.register(option, name="option")
+        app.add_section("Market", inputs=[
+            bind(option.Spot, label="Spot Price", format="$,.2f"),
+        ])
+        app.add_section("Results", outputs=[
+            bind(option.Delta, label="Option Delta", format=".3f"),
+        ])
+
+        subscribe = json.dumps({
+            "type": "subscribe",
+            "node_paths": ["option.Spot", "option.Delta", "option.Gamma"],
+        })
+        replies = _exchange(app, [subscribe])
+
+        schema = next(r for r in replies if r["type"] == "schema")
+        sections = schema["layout"]["sections"]
+        assert schema["layout"]["title"] == "Option Pricer"
+        assert [s["name"] for s in sections] == ["Market", "Results"]
+        assert sections[0]["inputs"][0]["node_path"] == "option.Spot"
+        assert sections[0]["inputs"][0]["label"] == "Spot Price"
+        assert sections[1]["outputs"][0]["node_path"] == "option.Delta"
+
+        values = {r["node_path"]: r for r in replies if r["type"] == "value"}
+        assert values["option.Spot"]["formatted"] == "$105.00"
+        assert values["option.Delta"]["formatted"] == f"{option.Delta():.3f}"
+        # Not in the layout: no format was asked for.
+        assert values["option.Gamma"]["formatted"] is None
+
+    def test_no_sections_means_auto_layout(self):
+        option = VanillaOption()
+        app = DagApp("Auto")
+        app.register(option, name="option")
+
+        replies = _exchange(app, [])
+        schema = next(r for r in replies if r["type"] == "schema")
+        assert schema["layout"] is None
+        assert "option" in schema["models"]

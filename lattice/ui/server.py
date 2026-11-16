@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any, Optional, Callable
@@ -31,7 +32,50 @@ from .protocol import (
     SchemaMessage,
     parse_message,
 )
-from .session import Session, SessionManager
+from .session import Session, SessionManager, OVERRIDES_UNSUPPORTED
+
+
+def _coerce_input(computed_func: Any, name: str, value: Any) -> Any:
+    """Check a value from the browser against the input it is meant for.
+
+    The model is shared by every client, so a value of the wrong type (a
+    string in Spot, NaN in Strike) would break every dependent calculation
+    for all of them. The new value must match the type of the current one.
+
+    Returns:
+        The value to set (an integral float becomes an int for int inputs)
+
+    Raises:
+        ValueError: If the value does not fit the input
+    """
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{name} must be a finite number")
+    if isinstance(value, (dict, list)):
+        raise ValueError(f"{name} cannot be set to a {type(value).__name__}")
+
+    try:
+        current = computed_func()
+    except Exception:
+        # The input cannot be evaluated right now, so there is no type to
+        # hold the new value to.
+        return value
+
+    is_number = isinstance(value, (int, float)) and not isinstance(value, bool)
+    if isinstance(current, bool):
+        if not isinstance(value, bool):
+            raise ValueError(f"{name} must be true or false, got {value!r}")
+    elif isinstance(current, int):
+        if not is_number or float(value) != int(value):
+            raise ValueError(f"{name} must be a whole number, got {value!r}")
+        return int(value)
+    elif isinstance(current, float):
+        if not is_number:
+            raise ValueError(f"{name} must be a number, got {value!r}")
+        return float(value)
+    elif isinstance(current, str):
+        if not isinstance(value, str):
+            raise ValueError(f"{name} must be text, got {value!r}")
+    return value
 
 
 class LatticeUIServer:
@@ -77,6 +121,10 @@ class LatticeUIServer:
         self._registered_models: dict[str, dag.Model] = {}
         self._websockets: dict[str, web.WebSocketResponse] = {}
 
+        # Optional layout (Layout.to_dict()) and the display format per node
+        self._layout: Optional[dict] = None
+        self._formats: dict[str, str] = {}
+
         # Callback for dag.flush() integration
         self._flush_pending = False
 
@@ -92,6 +140,20 @@ class LatticeUIServer:
         # Store the name on the model for node_path generation
         model._name = model_name
         self._registered_models[model_name] = model
+
+    def set_layout(self, layout: Optional[dict]) -> None:
+        """Use a custom layout instead of the auto-generated one.
+
+        Args:
+            layout: ``Layout.to_dict()`` (title plus sections of input and
+                output bindings), or None to go back to auto-layout
+        """
+        self._layout = layout
+        self._formats = {}
+        for section in (layout or {}).get("sections", []):
+            for binding in section.get("inputs", []) + section.get("outputs", []):
+                if binding.get("format"):
+                    self._formats[binding["node_path"]] = binding["format"]
 
     def _resolve_node_path(self, node_path: str) -> tuple[dag.Model, Any, str]:
         """
@@ -157,7 +219,7 @@ class LatticeUIServer:
 
         # Send schema for registered models
         schema = self._build_schema()
-        schema_msg = SchemaMessage(models=schema)
+        schema_msg = SchemaMessage(models=schema, layout=self._layout)
         await ws.send_str(schema_msg.to_json())
 
         try:
@@ -212,7 +274,12 @@ class LatticeUIServer:
         for node_path in msg.node_paths:
             try:
                 model, computed_func, attr_name = self._resolve_node_path(node_path)
-                session.subscribe(node_path, computed_func, model)
+                session.subscribe(
+                    node_path,
+                    computed_func,
+                    model,
+                    format_spec=self._formats.get(node_path),
+                )
 
                 # Send current value
                 value, formatted = session.get_value(node_path)
@@ -237,7 +304,7 @@ class LatticeUIServer:
         """Handle set value message."""
         try:
             model, computed_func, attr_name = self._resolve_node_path(msg.node_path)
-            computed_func.set(msg.value)
+            computed_func.set(_coerce_input(computed_func, attr_name, msg.value))
 
             # Flush dag to trigger watch callbacks
             dag.flush()
@@ -255,20 +322,9 @@ class LatticeUIServer:
         ws: web.WebSocketResponse,
         msg: OverrideMessage,
     ) -> None:
-        """Handle override value message."""
-        try:
-            model, computed_func, attr_name = self._resolve_node_path(msg.node_path)
-            computed_func.override(msg.value)
-
-            # Flush dag to trigger watch callbacks
-            dag.flush()
-
-            # Send updated values
-            await self._broadcast_updates()
-
-        except Exception as e:
-            err = ErrorMessage(error=str(e), node_path=msg.node_path)
-            await ws.send_str(err.to_json())
+        """Handle override value message (not supported; see session.py)."""
+        err = ErrorMessage(error=OVERRIDES_UNSUPPORTED, node_path=msg.node_path)
+        await ws.send_str(err.to_json())
 
     async def _handle_clear_override(
         self,
@@ -276,17 +332,9 @@ class LatticeUIServer:
         ws: web.WebSocketResponse,
         msg: ClearOverrideMessage,
     ) -> None:
-        """Handle clear override message."""
-        try:
-            model, computed_func, attr_name = self._resolve_node_path(msg.node_path)
-            computed_func.clear_override()
-
-            dag.flush()
-            await self._broadcast_updates()
-
-        except Exception as e:
-            err = ErrorMessage(error=str(e), node_path=msg.node_path)
-            await ws.send_str(err.to_json())
+        """Handle clear override message (not supported; see session.py)."""
+        err = ErrorMessage(error=OVERRIDES_UNSUPPORTED, node_path=msg.node_path)
+        await ws.send_str(err.to_json())
 
     async def _broadcast_updates(self) -> None:
         """Broadcast value updates to all connected sessions."""
@@ -435,6 +483,7 @@ class LatticeUIServer:
         const values = {};
         const rawValues = {};
         let schema = {};
+        let layout = null;
 
         ws.onopen = () => {
             document.getElementById('status').textContent = 'Connected';
@@ -450,7 +499,12 @@ class LatticeUIServer:
             const msg = JSON.parse(event.data);
             if (msg.type === 'schema') {
                 schema = msg.models;
-                renderModels();
+                layout = msg.layout;
+                if (layout && layout.sections && layout.sections.length > 0) {
+                    renderLayout();
+                } else {
+                    renderModels();
+                }
             } else if (msg.type === 'value') {
                 values[msg.node_path] = msg.formatted !== null ? msg.formatted : formatValue(msg.value);
                 rawValues[msg.node_path] = msg.value;
@@ -459,8 +513,106 @@ class LatticeUIServer:
                 console.log('Session:', msg.session_id);
             } else if (msg.type === 'error') {
                 console.error('Error:', msg.error, msg.node_path);
+                showError(msg.node_path, msg.error);
             }
         };
+
+        function showError(path, text) {
+            const el = document.getElementById('status');
+            el.textContent = (path ? path + ': ' : '') + text;
+            el.className = 'status disconnected';
+            el.title = text;
+        }
+
+        function clearError() {
+            const el = document.getElementById('status');
+            el.textContent = 'Connected';
+            el.className = 'status connected';
+            el.title = '';
+        }
+
+        function makeInput(path, labelText) {
+            const field = document.createElement('div');
+            field.className = 'field';
+            const label = document.createElement('label');
+            label.textContent = labelText;
+            const input = document.createElement('input');
+            input.type = 'number';
+            input.step = 'any';
+            input.id = 'input-' + path;
+            input.placeholder = 'Enter value...';
+            input.onchange = () => setValue(path, input);
+            field.appendChild(label);
+            field.appendChild(input);
+            return field;
+        }
+
+        function makeOutput(path, labelText, highlight) {
+            const item = document.createElement('div');
+            item.className = 'output-item' + (highlight ? ' price-highlight' : '');
+            const label = document.createElement('div');
+            label.className = 'label';
+            label.textContent = labelText;
+            const value = document.createElement('div');
+            value.className = 'value';
+            value.id = 'val-' + path;
+            value.textContent = '-';
+            item.appendChild(label);
+            item.appendChild(value);
+            return item;
+        }
+
+        function makeCard(title, gridClass) {
+            const card = document.createElement('div');
+            card.className = 'card';
+            const header = document.createElement('div');
+            header.className = 'card-header';
+            header.textContent = title;
+            const body = document.createElement('div');
+            body.className = 'card-body';
+            const grid = document.createElement('div');
+            grid.className = gridClass;
+            body.appendChild(grid);
+            card.appendChild(header);
+            card.appendChild(body);
+            return [card, grid];
+        }
+
+        // Custom layout from DagApp.add_section(): one card per section, with
+        // the labels and formats the app asked for.
+        function renderLayout() {
+            const container = document.getElementById('models');
+            container.innerHTML = '';
+            if (layout.title) {
+                document.title = layout.title;
+            }
+
+            const paths = [];
+            for (const section of layout.sections) {
+                const inputs = section.inputs || [];
+                const outputs = section.outputs || [];
+                if (inputs.length > 0) {
+                    const [card, grid] = makeCard(section.name, 'grid');
+                    inputs.forEach(b => {
+                        grid.appendChild(makeInput(b.node_path, b.label));
+                        paths.push(b.node_path);
+                    });
+                    container.appendChild(card);
+                }
+                if (outputs.length > 0) {
+                    const [card, grid] = makeCard(section.name, 'outputs-grid');
+                    outputs.forEach(b => {
+                        const isPrice = b.node_path.toLowerCase().includes('price');
+                        grid.appendChild(makeOutput(b.node_path, b.label, isPrice));
+                        paths.push(b.node_path);
+                    });
+                    container.appendChild(card);
+                }
+            }
+            if (paths.length > 0) {
+                ws.send(JSON.stringify({ type: 'subscribe', node_paths: paths }));
+            }
+        }
 
         function formatValue(v) {
             if (v === null || v === undefined) return '-';
@@ -486,44 +638,22 @@ class LatticeUIServer:
 
                 // Inputs card
                 if (model.inputs.length > 0) {
-                    const inputsCard = document.createElement('div');
-                    inputsCard.className = 'card';
-                    inputsCard.innerHTML = '<div class="card-header">Inputs</div><div class="card-body"><div class="grid" id="inputs-grid"></div></div>';
-                    const grid = inputsCard.querySelector('.grid');
-
+                    const [card, grid] = makeCard('Inputs', 'grid');
                     model.inputs.forEach(node => {
-                        const field = document.createElement('div');
-                        field.className = 'field';
-                        field.innerHTML = `
-                            <label>${pascalToTitle(node.name)}</label>
-                            <input type="number" step="any" id="input-${node.path}"
-                                   onchange="setValue('${node.path}', this.value)"
-                                   placeholder="Enter value...">
-                        `;
-                        grid.appendChild(field);
+                        grid.appendChild(makeInput(node.path, pascalToTitle(node.name)));
                     });
-                    container.appendChild(inputsCard);
+                    container.appendChild(card);
                 }
 
                 // Outputs card
                 const outputs = model.computed.filter(n => !n.has_input);
                 if (outputs.length > 0) {
-                    const outputsCard = document.createElement('div');
-                    outputsCard.className = 'card';
-                    outputsCard.innerHTML = '<div class="card-header">Results</div><div class="card-body"><div class="outputs-grid" id="outputs-grid"></div></div>';
-                    const grid = outputsCard.querySelector('.outputs-grid');
-
-                    outputs.forEach((node, i) => {
-                        const item = document.createElement('div');
+                    const [card, grid] = makeCard('Results', 'outputs-grid');
+                    outputs.forEach(node => {
                         const isPrice = node.name.toLowerCase().includes('price');
-                        item.className = 'output-item' + (isPrice ? ' price-highlight' : '');
-                        item.innerHTML = `
-                            <div class="label">${pascalToTitle(node.name)}</div>
-                            <div class="value" id="val-${node.path}">-</div>
-                        `;
-                        grid.appendChild(item);
+                        grid.appendChild(makeOutput(node.path, pascalToTitle(node.name), isPrice));
                     });
-                    container.appendChild(outputsCard);
+                    container.appendChild(card);
                 }
             }
         }
@@ -533,18 +663,36 @@ class LatticeUIServer:
             const outputEl = document.getElementById('val-' + path);
             if (outputEl) outputEl.textContent = values[path];
 
-            // Update input field placeholder with current value
+            // Match the input control to the value's type, and show the
+            // current value.
             const inputEl = document.getElementById('input-' + path);
-            if (inputEl && rawValues[path] !== undefined) {
-                inputEl.placeholder = rawValues[path];
+            const raw = rawValues[path];
+            if (inputEl && raw !== undefined && raw !== null) {
+                if (typeof raw === 'boolean') {
+                    inputEl.type = 'checkbox';
+                    inputEl.checked = raw;
+                } else if (typeof raw === 'string') {
+                    inputEl.type = 'text';
+                    inputEl.placeholder = raw;
+                } else {
+                    inputEl.type = 'number';
+                    inputEl.placeholder = raw;
+                }
             }
         }
 
-        function setValue(path, value) {
-            const parsed = parseFloat(value);
-            if (!isNaN(parsed)) {
-                ws.send(JSON.stringify({ type: 'set', node_path: path, value: parsed }));
+        function setValue(path, input) {
+            let value;
+            if (input.type === 'checkbox') {
+                value = input.checked;
+            } else if (input.type === 'text') {
+                value = input.value;
+            } else {
+                value = parseFloat(input.value);
+                if (isNaN(value)) return;
             }
+            clearError();
+            ws.send(JSON.stringify({ type: 'set', node_path: path, value: value }));
         }
     </script>
 </body>

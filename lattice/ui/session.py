@@ -22,6 +22,17 @@ class NodeSubscription:
         return self.computed_func()
 
 
+# A dag override only exists inside a dag.scenario() block, which ends when
+# the block does, so there is nothing for a long-lived connection to hold
+# open. Until sessions get their own scenarios, say so instead of failing
+# with an internal error.
+OVERRIDES_UNSUPPORTED = (
+    "Overrides are not supported over the UI connection: a dag override only "
+    "lasts for the duration of a dag.scenario() block on the server. "
+    "Use a 'set' message to change an input."
+)
+
+
 class Session:
     """
     Represents a single client connection with its own subscriptions.
@@ -131,19 +142,11 @@ class Session:
             node_path: Path to the node
             value: Value to override with
         """
-        if node_path not in self._subscriptions:
-            raise KeyError(f"Not subscribed to {node_path}")
-
-        sub = self._subscriptions[node_path]
-        sub.computed_func.override(value)
+        raise NotImplementedError(OVERRIDES_UNSUPPORTED)
 
     def clear_override(self, node_path: str) -> None:
         """Clear an override on a node."""
-        if node_path not in self._subscriptions:
-            raise KeyError(f"Not subscribed to {node_path}")
-
-        sub = self._subscriptions[node_path]
-        sub.computed_func.clear_override()
+        raise NotImplementedError(OVERRIDES_UNSUPPORTED)
 
     def flush_invalidations(self) -> set[str]:
         """

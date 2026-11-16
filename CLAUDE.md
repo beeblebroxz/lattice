@@ -192,13 +192,13 @@ with lattice.scenario():
 PositionTable and TradeBlotter use livetable for 25x faster iteration:
 
 ```python
-from livetable import Table, Schema, DataType
+from livetable import Table, Schema, ColumnType
 
 schema = Schema([
-    ("symbol", DataType.STRING),
-    ("quantity", DataType.INT64),
+    ("symbol", ColumnType.STRING, False),    # (name, type, nullable)
+    ("quantity", ColumnType.INT64, False),
 ])
-table = Table(schema)
+table = Table("positions", schema)
 ```
 
 ### TradingSystem Architecture
@@ -321,6 +321,29 @@ pytest --ignore=tests/test_ui.py
 - `obj.save()` / `obj.path()` / `obj.store` come from `lattice.store.Storable`
   (dag.Model itself has no store methods); `Instrument`, `Book`, `Trade` and
   `Position` include it, and a custom model must list it before `dag.Model`
+
+## Conventions Worth Knowing
+
+- **P&L**: `Book.TotalPnL()` and `Position.TotalPnL()` are realized plus
+  unrealized. Reducing, closing or flipping a position moves P&L into
+  `RealizedPnL`; flat positions stay in `Book.AllPositions()` to keep it.
+- **Book positions**: `Book.AllPositions` is a dag input that TradingSystem
+  sets. Never keep position state on a plain attribute: dag would cache the
+  first read and every book value would go stale.
+- **Valuation interface**: every instrument has `MarketValue()`; most also
+  have `Price()`. Risk functions measure `Price`, falling back to
+  `MarketValue` (forwards, futures, FX). Book Greeks use `MarketValue`.
+- **Greek units**: vega and rho per 1%, theta per day, DV01 per basis point,
+  independent of the bump size passed in.
+- **Rate inputs**: `Rate` (options, forwards), `YieldToMaturity` (bonds),
+  `DiscountRate` (swaps). A swap's `FloatingRate` is the current period's
+  fixing and defaults to `DiscountRate`.
+- **Type patterns**: the most specific matching pattern wins, not the first
+  registered.
+- **Workflows**: instruments are sent to workers as inline state holding only
+  the inputs that were explicitly set, so derived defaults stay derived.
+- **UI**: the server type-checks every value from the browser against the
+  input's current value; overrides are not supported over the connection.
 
 ## Architecture Principles
 

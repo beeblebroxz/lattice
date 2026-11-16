@@ -4,6 +4,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
 from enum import Enum
 import json
+import math
 
 
 class MessageType(Enum):
@@ -24,6 +25,17 @@ class MessageType(Enum):
     SCHEMA = "schema"
 
 
+def _json_safe(value: Any) -> Any:
+    """Replace non-finite floats with None, recursively."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
 @dataclass
 class Message:
     """Base message class."""
@@ -34,7 +46,9 @@ class Message:
         """Serialize message to JSON string."""
         data = asdict(self)
         data["type"] = self.type.value
-        return json.dumps(data)
+        # NaN and Infinity are not valid JSON: a browser's JSON.parse rejects
+        # the whole frame. Send them as null.
+        return json.dumps(_json_safe(data), allow_nan=False)
 
     @classmethod
     def from_json(cls, json_str: str) -> "Message":
@@ -152,6 +166,8 @@ class SchemaMessage(Message):
     type: MessageType = field(default=MessageType.SCHEMA, init=False)
     models: dict[str, dict] = field(default_factory=dict)
     # Structure: {"model_name": {"inputs": [...], "outputs": [...], "computed": [...]}}
+    layout: Optional[dict] = None
+    # Layout.to_dict() when the app defines sections; None means auto-layout.
 
 
 def parse_message(json_str: str) -> Message:

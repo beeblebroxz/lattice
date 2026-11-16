@@ -159,6 +159,10 @@ class DagApp:
         for name, model in self._models.items():
             server.register(model, name)
 
+        # Sections added with add_section() replace the auto-generated page
+        if self._layout.sections:
+            server.set_layout(self._layout.to_dict())
+
         return server
 
     def run(self, host: str = "localhost", port: int = 8080, open_browser: bool = True) -> None:
