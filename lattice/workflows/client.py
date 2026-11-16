@@ -49,22 +49,31 @@ def _check_temporalio():
 def _instrument_to_ref(inst: dag.Model) -> InstrumentRef:
     """Convert a dag.Model instrument to an InstrumentRef.
 
-    Prefers store path if available, falls back to inline serialization.
+    The instrument's full input state is always sent inline, whether or not
+    it is also saved in a Store. A Store keeps only contract terms, so loading
+    by path on the worker would price off default market data rather than the
+    Spot, Volatility and rates the caller is looking at.
 
     Args:
         inst: The instrument
 
     Returns:
         InstrumentRef that can be passed to activities
+
+    Raises:
+        ValueError: If the instrument's class is defined in a script
+            (``__main__``), which a worker process cannot import
     """
-    if hasattr(inst, "path") and inst.path():
-        return InstrumentRef(store_path=inst.path())
-    else:
-        type_name = f"{inst.__class__.__module__}.{inst.__class__.__name__}"
-        return InstrumentRef(
-            serialized_state=serialize_instrument(inst),
-            type_name=type_name,
+    cls = inst.__class__
+    if cls.__module__ == "__main__":
+        raise ValueError(
+            f"{cls.__name__} is defined in __main__, which a worker cannot "
+            f"import. Move the class into an importable module."
         )
+    return InstrumentRef(
+        serialized_state=serialize_instrument(inst),
+        type_name=f"{cls.__module__}.{cls.__name__}",
+    )
 
 
 async def compute_greeks_async(

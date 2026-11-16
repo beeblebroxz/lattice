@@ -11,6 +11,9 @@ To run integration tests, install temporal extras:
 
 import pytest
 from dataclasses import asdict
+from datetime import datetime
+
+import dag
 
 import sys
 import os
@@ -402,3 +405,168 @@ class TestWorkflowIntegration:
 
         assert "OPT_1" in result
         assert result["OPT_1"]["price_impact"] < 0
+
+
+class _Dated(dag.Model):
+    """Instrument-like model with inputs the wire format must not drop."""
+
+    @dag.computed(dag.Input)
+    def Expiry(self):
+        return datetime(2030, 1, 1)
+
+    @dag.computed(dag.Input)
+    def Lots(self):
+        return 1
+
+    @dag.computed(dag.Input | dag.Overridable)
+    def Spot(self) -> float:
+        return 100.0
+
+    @dag.computed
+    def Price(self) -> float:
+        return self.Spot() * self.Lots()
+
+
+class TestWorkerSeesCallerState:
+    """A worker prices the instrument the caller has, market data included."""
+
+    def test_stored_instrument_is_sent_inline(self):
+        from lattice.store import connect
+        from lattice.workflows.client import _instrument_to_ref
+
+        store = connect("memory://")
+        store.register_type("/Instruments/*", VanillaOption)
+        opt = store.new(VanillaOption, "/Instruments/OPT")
+        opt.Spot.set(123.0)
+        opt.Volatility.set(0.35)
+
+        ref = _instrument_to_ref(opt)
+        assert ref.type_name.endswith("VanillaOption")
+        assert ref.serialized_state["Spot"] == 123.0
+
+        restored = _load_instrument(ref)
+        assert restored.Spot() == 123.0
+        assert restored.Price() == pytest.approx(opt.Price())
+
+    def test_activity_computes_greeks_for_stored_instrument(self):
+        import asyncio
+        from lattice.store import connect
+        from lattice.workflows.activities import compute_instrument_greeks
+        from lattice.workflows.client import _instrument_to_ref
+
+        store = connect("memory://")
+        store.register_type("/Instruments/*", VanillaOption)
+        opt = store.new(VanillaOption, "/Instruments/OPT")
+        opt.Spot.set(110.0)
+
+        result = asyncio.run(
+            compute_instrument_greeks("OPT", _instrument_to_ref(opt))
+        )
+        assert result.error is None
+        assert result.delta == pytest.approx(opt.Delta(), rel=1e-2)
+
+    def test_datetime_and_numpy_inputs_survive(self):
+        import numpy as np
+
+        inst = _Dated()
+        inst.Expiry.set(datetime(2027, 6, 30, 16, 0))
+        inst.Lots.set(np.int64(5))
+
+        data = serialize_instrument(inst)
+        restored = deserialize_instrument(f"{__name__}._Dated", data)
+        assert restored.Expiry() == datetime(2027, 6, 30, 16, 0)
+        assert restored.Lots() == 5
+        assert restored.Price() == 500.0
+
+    def test_only_explicitly_set_inputs_are_sent(self):
+        from lattice import InterestRateSwap
+
+        swap = InterestRateSwap()
+        swap.DiscountRate.set(0.04)
+        data = serialize_instrument(swap)
+        assert data == {"DiscountRate": 0.04}
+
+        # The worker's FloatingRate still follows its DiscountRate.
+        restored = deserialize_instrument("lattice.InterestRateSwap", data)
+        assert restored.FloatingRate() == 0.04
+
+        swap.FloatingRate.set(0.02)
+        assert serialize_instrument(swap)["FloatingRate"] == 0.02
+
+    def test_unsendable_input_raises(self):
+        from lattice import Position
+        from lattice.store import SerializationError
+
+        pos = Position()
+        pos.LinkedInstrument.set(VanillaOption())
+        with pytest.raises(SerializationError, match="LinkedInstrument"):
+            serialize_instrument(pos)
+
+    def test_store_path_ref_needs_type_name(self):
+        ref = InstrumentRef(store_path="/Instruments/OPT")
+        with pytest.raises(ValueError, match="type_name"):
+            _load_instrument(ref, store_uri="memory://")
+
+    def test_store_path_ref_loads_with_type_name(self, tmp_path):
+        from lattice.store import connect
+
+        uri = f"sqlite:///{tmp_path / 'store.db'}"
+        store = connect(uri)
+        store.register_type("/Instruments/*", VanillaOption)
+        opt = store.new(VanillaOption, "/Instruments/OPT")
+        opt.Strike.set(150.0)
+        opt.save()
+        store.close()
+
+        ref = InstrumentRef(
+            store_path="/Instruments/OPT", type_name="lattice.VanillaOption"
+        )
+        assert _load_instrument(ref, store_uri=uri).Strike() == 150.0
+
+    def test_forward_and_swap_get_greeks(self):
+        import asyncio
+        from lattice import Forward, InterestRateSwap
+        from lattice.workflows.activities import compute_instrument_greeks
+        from lattice.workflows.client import _instrument_to_ref
+
+        fwd = asyncio.run(
+            compute_instrument_greeks("FWD", _instrument_to_ref(Forward()))
+        )
+        assert fwd.delta == pytest.approx(1.0, rel=1e-6)
+
+        swap = InterestRateSwap()
+        res = asyncio.run(
+            compute_instrument_greeks("SWAP", _instrument_to_ref(swap))
+        )
+        assert res.dv01 == pytest.approx(swap.DV01(), rel=1e-2)
+
+
+class TestDistributedErrorsSurface:
+    """RiskEngine does not hide a worker-side failure."""
+
+    def test_error_is_returned_and_logged(self, monkeypatch, caplog):
+        import asyncio
+        import lattice.workflows as workflows
+        from lattice.risk import RiskEngine
+
+        async def fake_compute_greeks_async(instruments, **kwargs):
+            return {
+                "GOOD": {"instrument_name": "GOOD", "delta": 0.5, "error": None},
+                "BAD": {
+                    "instrument_name": "BAD",
+                    "delta": None,
+                    "error": "Failed to load instrument: boom",
+                },
+            }
+
+        monkeypatch.setattr(workflows, "compute_greeks_async", fake_compute_greeks_async)
+
+        engine = RiskEngine()
+        engine.add(VanillaOption(), "GOOD")
+        engine.add(VanillaOption(), "BAD")
+        with caplog.at_level("WARNING"):
+            results = asyncio.run(engine.compute_greeks_distributed())
+
+        assert results["GOOD"] == {"delta": 0.5}
+        assert results["BAD"] == {"error": "Failed to load instrument: boom"}
+        assert "BAD" in caplog.text
