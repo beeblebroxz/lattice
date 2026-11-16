@@ -41,6 +41,13 @@ class SQLiteBackend(StorageBackend):
             path, check_same_thread=False, isolation_level=None
         )
         self._conn.row_factory = sqlite3.Row
+        if path != ":memory:":
+            # Write-ahead logging: a commit appends to the log and syncs once,
+            # instead of writing and syncing a rollback journal as well. That
+            # makes each save several times cheaper with the same durability
+            # (synchronous stays at its default, FULL). SQLite keeps "-wal"
+            # and "-shm" files beside the database while it is open.
+            self._conn.execute("PRAGMA journal_mode=WAL")
         self._create_tables()
 
     def _create_tables(self) -> None:
@@ -60,12 +67,9 @@ class SQLiteBackend(StorageBackend):
         )
         # Migrate existing tables to add schema_version if needed
         self._migrate_schema()
-        # Index for prefix queries
-        self._conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_objects_path ON objects(path)
-            """
-        )
+        # Older databases carry a separate index on path. The primary key
+        # already indexes it, so the extra one only doubled index writes.
+        self._conn.execute("DROP INDEX IF EXISTS idx_objects_path")
 
     def _migrate_schema(self) -> None:
         """Add schema_version column to existing databases if missing."""
@@ -118,6 +122,38 @@ class SQLiteBackend(StorageBackend):
                 obj.created_at,
                 obj.updated_at,
             ),
+        )
+
+    def upsert(
+        self,
+        path: str,
+        type_name: str,
+        data: Any,
+        schema_version: int,
+        now: float,
+    ) -> None:
+        """Create or replace the object at path in a single statement.
+
+        The version bump happens inside SQLite, so a save does not need to
+        read the existing row first.
+        """
+        if sqlite3.sqlite_version_info < (3, 24):
+            # No ON CONFLICT ... DO UPDATE before SQLite 3.24: read then write.
+            super().upsert(path, type_name, data, schema_version, now)
+            return
+        self._conn.execute(
+            """
+            INSERT INTO objects
+                (path, type_name, data, version, schema_version, created_at, updated_at)
+            VALUES (?, ?, ?, 1, ?, ?, ?)
+            ON CONFLICT(path) DO UPDATE SET
+                type_name = excluded.type_name,
+                data = excluded.data,
+                version = objects.version + 1,
+                schema_version = excluded.schema_version,
+                updated_at = excluded.updated_at
+            """,
+            (path, type_name, json.dumps(data), schema_version, now, now),
         )
 
     def delete(self, path: str) -> bool:

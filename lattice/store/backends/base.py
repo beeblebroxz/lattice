@@ -61,6 +61,42 @@ class StorageBackend(ABC):
         """
         pass
 
+    def upsert(
+        self,
+        path: str,
+        type_name: str,
+        data: Any,
+        schema_version: int,
+        now: float,
+    ) -> None:
+        """Create the object at path, or replace it and bump its version.
+
+        A new object gets version 1 and created_at = now. An existing one
+        keeps its created_at and has its version incremented.
+
+        This default reads the current record and writes the new one.
+        Backends that can do both in one step should override it.
+
+        Args:
+            path: The object path
+            type_name: Class name of the stored object
+            data: Serialized field values
+            schema_version: Schema version of the data
+            now: Timestamp for created_at (new objects) and updated_at
+        """
+        existing = self.get(path)
+        self.put(
+            StoredObject(
+                path=path,
+                type_name=type_name,
+                data=data,
+                version=existing.version + 1 if existing else 1,
+                schema_version=schema_version,
+                created_at=existing.created_at if existing else now,
+                updated_at=now,
+            )
+        )
+
     @abstractmethod
     def delete(self, path: str) -> bool:
         """Delete object at path.

@@ -49,7 +49,7 @@ db = connect("memory://")
 | Scheme | Description |
 |--------|-------------|
 | `memory://` | In-memory storage (for testing) |
-| `sqlite:///path.db` | SQLite file storage |
+| `sqlite:///path.db` | SQLite file storage (write-ahead logging; `path.db-wal` and `path.db-shm` sit beside the file while it is open) |
 | `sqlite:///:memory:` | SQLite in-memory |
 
 ## Store Class

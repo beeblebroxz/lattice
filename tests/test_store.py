@@ -1351,3 +1351,95 @@ class TestObjectTracking:
         copy = store["/I/X"]
         assert copy is not option
         assert copy.Strike() == 7.0
+
+
+class TestVersioning:
+    """Each save bumps the version and keeps the creation time."""
+
+    def test_version_and_created_at(self, any_store):
+        any_store.register_type("/I/*", VanillaOption)
+        option = any_store.new(VanillaOption, "/I/a")
+        first = any_store._backend.get("/I/a")
+        assert first.version == 1
+        assert first.type_name == "VanillaOption"
+
+        option.Strike.set(150.0)
+        option.save()
+        option.save()
+        latest = any_store._backend.get("/I/a")
+        assert latest.version == 3
+        assert latest.created_at == first.created_at
+        assert latest.updated_at >= first.updated_at
+        assert latest.data["Strike"] == 150.0
+
+    def test_delete_then_recreate_restarts_version(self, any_store):
+        any_store.register_type("/I/*", VanillaOption)
+        any_store.new(VanillaOption, "/I/a").save()
+        del any_store["/I/a"]
+        any_store.new(VanillaOption, "/I/a")
+        assert any_store._backend.get("/I/a").version == 1
+
+    def test_custom_backend_gets_default_upsert(self):
+        """A backend that only implements get/put still versions correctly."""
+
+        class Minimal(MemoryBackend):
+            upsert = MemoryBackend.__mro__[1].upsert  # StorageBackend default
+
+        backend = Minimal()
+        backend.connect()
+        store = Store(backend)
+        option = VanillaOption()
+        store["/I/a"] = option
+        store["/I/a"] = option
+        assert backend.get("/I/a").version == 2
+
+
+class TestSqliteFileSetup:
+    """File databases use write-ahead logging and no redundant index."""
+
+    def test_wal_mode_and_no_extra_index(self, tmp_path):
+        import sqlite3
+
+        path = tmp_path / "store.db"
+        store = connect(f"sqlite:///{path}")
+        conn = store._backend._conn
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        indexes = [row["name"] for row in conn.execute("PRAGMA index_list(objects)")]
+        assert "idx_objects_path" not in indexes
+        store.close()
+
+    def test_old_database_is_upgraded_and_readable(self, tmp_path):
+        import sqlite3
+
+        path = tmp_path / "old.db"
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "CREATE TABLE objects (path TEXT PRIMARY KEY, type_name TEXT NOT NULL, "
+            "data TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, "
+            "schema_version INTEGER NOT NULL DEFAULT 1, created_at REAL NOT NULL, "
+            "updated_at REAL NOT NULL)"
+        )
+        conn.execute("CREATE INDEX idx_objects_path ON objects(path)")
+        conn.execute(
+            "INSERT INTO objects VALUES ('/I/a', 'VanillaOption', "
+            "'{\"Strike\": 120.0}', 4, 1, 1.0, 2.0)"
+        )
+        conn.commit()
+        conn.close()
+
+        store = connect(f"sqlite:///{path}")
+        store.register_type("/I/*", VanillaOption)
+        option = store["/I/a"]
+        assert option.Strike() == 120.0
+        option.save()
+        record = store._backend.get("/I/a")
+        assert record.version == 5
+        assert record.created_at == 1.0
+        store.close()
+
+    def test_memory_database_still_works(self):
+        store = connect("sqlite:///:memory:")
+        store["/I/a"] = VanillaOption()
+        store["/I/a"] = store["/I/a"]
+        assert store._backend.get("/I/a").version == 2
+        store.close()
