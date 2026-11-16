@@ -568,3 +568,67 @@ class TestServerLayout:
         schema = next(r for r in replies if r["type"] == "schema")
         assert schema["layout"] is None
         assert "option" in schema["models"]
+
+
+class TestUpdatesSentOnce:
+    """After an input changes, each client gets each changed value once."""
+
+    PATHS = ["option.Spot", "option.Strike", "option.Price", "option.Delta"]
+
+    def test_single_client(self):
+        option = VanillaOption()
+        app = DagApp("Pricer")
+        app.register(option, name="option")
+        subscribe = json.dumps({"type": "subscribe", "node_paths": self.PATHS})
+
+        replies = _exchange(app, [subscribe, _set("option.Spot", 110)], settle=0.5)
+        values = [r for r in replies if r["type"] == "value"]
+        updates = values[len(self.PATHS):]  # after the initial subscribe values
+
+        by_path = {}
+        for update in updates:
+            by_path.setdefault(update["node_path"], []).append(update["value"])
+        assert by_path["option.Spot"] == [110.0]
+        assert by_path["option.Price"] == [pytest.approx(option.Price())]
+        assert by_path["option.Delta"] == [pytest.approx(option.Delta())]
+        assert "option.Strike" not in by_path  # unchanged, so not re-sent
+
+    def test_other_clients_are_updated(self):
+        import asyncio
+        import aiohttp
+
+        option = VanillaOption()
+        app = DagApp("Pricer")
+        app.register(option, name="option")
+
+        async def drain(ws, timeout=0.4):
+            out = []
+            while True:
+                try:
+                    msg = await asyncio.wait_for(ws.receive(), timeout=timeout)
+                except asyncio.TimeoutError:
+                    return out
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    return out
+                out.append(json.loads(msg.data))
+
+        async def run():
+            port = _free_port()
+            await app.start_async(port=port)
+            try:
+                async with aiohttp.ClientSession() as http:
+                    url = f"http://localhost:{port}/ws"
+                    async with http.ws_connect(url) as editor, http.ws_connect(url) as viewer:
+                        subscribe = json.dumps(
+                            {"type": "subscribe", "node_paths": ["option.Price"]}
+                        )
+                        await viewer.send_str(subscribe)
+                        await drain(viewer)
+                        await editor.send_str(_set("option.Spot", 120))
+                        return await drain(viewer)
+            finally:
+                await app.stop_async()
+
+        seen = [r for r in asyncio.run(run()) if r["type"] == "value"]
+        assert [r["node_path"] for r in seen] == ["option.Price"]
+        assert seen[0]["value"] == pytest.approx(option.Price())

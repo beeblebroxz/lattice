@@ -333,6 +333,16 @@ pytest --ignore=tests/test_ui.py
 - **Valuation interface**: every instrument has `MarketValue()`; most also
   have `Price()`. Risk functions measure `Price`, falling back to
   `MarketValue` (forwards, futures, FX). Book Greeks use `MarketValue`.
+- **Position Greeks**: `Position.Greeks()` computes delta, gamma and vega in
+  one cached node; `Delta()`/`Gamma()`/`Vega()` read from it and book Greeks
+  sum them. Keep them together: each is a bump inside a dag scenario, and a
+  scenario invalidates everything depending on the bumped instrument, so
+  separate nodes evict each other's cached values.
+- **Helpers called from a computed node**: dag reads a node's dependencies
+  from its own body. Read inputs in the node and pass them to the helper;
+  reading them inside the helper raises `UntrackedError`.
+- **Indexes in TradingSystem**: positions and trades are indexed by book and
+  by symbol. Use the indexes; do not scan `_positions` or `_trades`.
 - **Greek units**: vega and rho per 1%, theta per day, DV01 per basis point,
   independent of the bump size passed in.
 - **Rate inputs**: `Rate` (options, forwards), `YieldToMaturity` (bonds),

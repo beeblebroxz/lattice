@@ -306,11 +306,10 @@ class LatticeUIServer:
             model, computed_func, attr_name = self._resolve_node_path(msg.node_path)
             computed_func.set(_coerce_input(computed_func, attr_name, msg.value))
 
-            # Flush dag to trigger watch callbacks
+            # Flush dag to trigger watch callbacks. Each session watches the
+            # nodes it subscribed to, so every client is sent exactly the
+            # values that changed, once.
             dag.flush()
-
-            # Send updated values to all sessions subscribed to this path
-            await self._broadcast_updates()
 
         except Exception as e:
             err = ErrorMessage(error=str(e), node_path=msg.node_path)
@@ -335,22 +334,6 @@ class LatticeUIServer:
         """Handle clear override message (not supported; see session.py)."""
         err = ErrorMessage(error=OVERRIDES_UNSUPPORTED, node_path=msg.node_path)
         await ws.send_str(err.to_json())
-
-    async def _broadcast_updates(self) -> None:
-        """Broadcast value updates to all connected sessions."""
-        for session in self._session_manager.get_all_sessions():
-            ws = self._websockets.get(session.session_id)
-            if ws is None or ws.closed:
-                continue
-
-            # Get all current values for subscribed nodes
-            values = session.get_all_values()
-            for node_path, (value, formatted) in values.items():
-                msg = ValueMessage(node_path=node_path, value=value, formatted=formatted)
-                try:
-                    await ws.send_str(msg.to_json())
-                except Exception:
-                    pass  # Connection may have closed
 
     def _build_schema(self) -> dict[str, dict]:
         """Build schema for all registered models."""
