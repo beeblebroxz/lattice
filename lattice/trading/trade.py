@@ -6,8 +6,10 @@ A Trade represents a transaction between two books (buyer and seller).
 from datetime import datetime
 import dag
 
+from lattice.store.storable import Storable
 
-class Trade(dag.Model):
+
+class Trade(Storable, dag.Model):
     """A single trade - transaction between two books.
 
     A trade represents a transfer of an instrument from seller to buyer

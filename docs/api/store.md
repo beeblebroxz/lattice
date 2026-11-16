@@ -237,7 +237,19 @@ db.clear_cache()
 
 ## Object Self-Awareness
 
-Stored objects know their path and store.
+Stored objects know their path and store. These methods come from the
+`lattice.store.Storable` mixin, which all lattice instruments and the trading
+models (`Book`, `Trade`, `Position`) include. To get them on your own model,
+list the mixin before `dag.Model`:
+
+```python
+from lattice.store import Storable
+
+class MyModel(Storable, dag.Model):
+    ...
+```
+
+A plain `dag.Model` can still be stored; use `db[path] = obj` and `db.save(obj)`.
 
 ### `obj.path()`
 

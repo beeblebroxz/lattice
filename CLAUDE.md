@@ -62,6 +62,7 @@ lattice/
 │   ├── store/                    # Persistent storage
 │   │   ├── __init__.py           # Public API: connect, Store
 │   │   ├── core.py               # Store class
+│   │   ├── storable.py           # Storable mixin: obj.path(), obj.save(), obj.store
 │   │   ├── serialization.py      # Serializer, TypeRegistry
 │   │   ├── exceptions.py         # StoreError hierarchy
 │   │   └── backends/
@@ -313,6 +314,9 @@ pytest --ignore=tests/test_ui.py
 - Computed values are recalculated on load
 - Supported types: primitives, list, dict, datetime
 - Model references: store the path, not the object
+- `obj.save()` / `obj.path()` / `obj.store` come from `lattice.store.Storable`
+  (dag.Model itself has no store methods); `Instrument`, `Book`, `Trade` and
+  `Position` include it, and a custom model must list it before `dag.Model`
 
 ## Architecture Principles
 

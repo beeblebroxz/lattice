@@ -34,6 +34,7 @@ Supported backends:
 Key Classes:
     - Store: Main storage interface with dict-like access
     - connect(): Create a Store from a URL
+    - Storable: Mixin giving a model obj.path(), obj.save() and obj.store
 
 Backend Classes:
     - MemoryBackend: In-memory storage for testing
@@ -45,6 +46,7 @@ Serialization:
 """
 
 from .core import Store, connect
+from .storable import Storable
 from .backends import StorageBackend, StoredObject, MemoryBackend, SQLiteBackend
 from .serialization import Serializer, TypeRegistry
 from .exceptions import (
@@ -60,6 +62,7 @@ __all__ = [
     # Main API
     "Store",
     "connect",
+    "Storable",
     # Backends
     "StorageBackend",
     "StoredObject",

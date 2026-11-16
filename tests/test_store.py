@@ -621,6 +621,45 @@ class TestObjectSelfAwareness:
         memory_store["/Instruments/NEW_PATH"] = option
         assert option.path() == "/Instruments/NEW_PATH"
 
+    def test_trading_models_are_storable(self, memory_store):
+        """Book (a non-instrument model) also has path() and save()."""
+        memory_store.register_type("/Books/*", Book)
+        book = memory_store.new(Book, "/Books/DESK")
+
+        assert book.path() == "/Books/DESK"
+        assert book.store is memory_store
+        book.save()
+        assert "/Books/DESK" in memory_store
+
+    def test_save_after_clear_cache(self, memory_store):
+        """An object keeps its path across clear_cache() and can still save."""
+        option = memory_store.new(VanillaOption, "/Instruments/TEST")
+        memory_store.clear_cache()
+
+        option.Strike.set(175.0)
+        option.save()
+
+        memory_store.clear_cache()
+        assert memory_store["/Instruments/TEST"].Strike() == 175.0
+
+    def test_plain_model_uses_store_api(self, memory_store):
+        """A plain dag.Model has no save(); db.save(obj) still works."""
+
+        class Plain(dag.Model):
+            @dag.computed(dag.Persisted)
+            def Value(self) -> float:
+                return 1.0
+
+        memory_store.register_type("/Plain/*", Plain)
+        obj = Plain()
+        memory_store["/Plain/A"] = obj
+        assert not hasattr(obj, "save")
+
+        obj.Value.set(2.0)
+        memory_store.save(obj)
+        memory_store.clear_cache()
+        assert memory_store["/Plain/A"].Value() == 2.0
+
 
 class TestStoreNew:
     """Tests for db.new() helper method."""

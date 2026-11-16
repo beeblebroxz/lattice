@@ -7,6 +7,8 @@ trading desk, customer account, or internal book.
 from typing import Optional, List, TYPE_CHECKING
 import dag
 
+from lattice.store.storable import Storable
+
 from .position import Position
 
 if TYPE_CHECKING:
@@ -16,7 +18,7 @@ if TYPE_CHECKING:
 _GREEK_REQUIRES = {"delta": "Spot", "vega": "Volatility", "gamma": "Spot"}
 
 
-class Book(dag.Model):
+class Book(Storable, dag.Model):
     """A book holding positions with aggregated P&L.
 
     A Book represents an entity that holds positions - it could be a

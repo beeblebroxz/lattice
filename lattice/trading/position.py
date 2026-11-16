@@ -5,8 +5,10 @@ A Position represents a holding in a single instrument for a book.
 
 import dag
 
+from lattice.store.storable import Storable
 
-class Position(dag.Model):
+
+class Position(Storable, dag.Model):
     """A position in a single instrument for a book.
 
     Positions are aggregated from trades. The quantity is signed:

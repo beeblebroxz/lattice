@@ -2,8 +2,10 @@
 
 import dag
 
+from lattice.store.storable import Storable
 
-class Instrument(dag.Model):
+
+class Instrument(Storable, dag.Model):
     """
     Base class for all financial instruments.
 
