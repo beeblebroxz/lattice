@@ -161,6 +161,22 @@ class Store:
         # Store
         self._backend.put(stored)
 
+        # An object this one replaces at the path is no longer stored. Drop
+        # its tracking entry too: left behind, it would outlive the object and
+        # could match an unrelated object that later reuses the same id().
+        previous = self._identity_map.get(path)
+        if previous is not None and previous is not obj:
+            self._object_paths.pop(id(previous), None)
+            previous._store_ref = None
+            previous._store_path = None
+
+        # An object lives at one path. If it was stored somewhere else, that
+        # path keeps its saved copy but stops being this object.
+        old_path = self._object_paths.get(id(obj))
+        if old_path is not None and old_path != path:
+            if self._identity_map.get(old_path) is obj:
+                del self._identity_map[old_path]
+
         # Set object's store awareness
         obj._store_ref = weakref.ref(self)
         obj._store_path = path
@@ -398,6 +414,14 @@ def connect(url: str) -> Store:
         from .backends.sqlite import SQLiteBackend
 
         # Handle sqlite:///path and sqlite:///:memory:
+        if parsed.netloc:
+            # "sqlite://name.db" parses "name.db" as a host and leaves the
+            # path empty, which would silently open an in-memory database.
+            raise ValueError(
+                f"Invalid SQLite URL {url!r}: use three slashes for a relative "
+                f"path (sqlite:///{parsed.netloc}{parsed.path}) or four for an "
+                f"absolute one (sqlite:////abs/path.db)."
+            )
         path = parsed.path
         if path.startswith("/"):
             path = path[1:]  # Remove leading slash from file path

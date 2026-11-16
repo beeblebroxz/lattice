@@ -1168,3 +1168,186 @@ class TestSchemaVersionInStore:
             # Load with new schema - migration should apply
             new_obj = db["/Test/A"]
             assert new_obj.NewName() == "test_value"
+
+
+@pytest.fixture(params=["memory", "sqlite"])
+def any_store(request):
+    """A store on each backend, so both are held to the same behaviour."""
+    if request.param == "memory":
+        store = connect("memory://")
+        yield store
+        store.close()
+    else:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = connect(f"sqlite:///{os.path.join(tmp, 'store.db')}")
+            yield store
+            store.close()
+
+
+class TestTransactionsOnEveryBackend:
+    """Rollback undoes writes, updates and deletes on both backends."""
+
+    def test_rollback_undoes_everything(self, any_store):
+        any_store.register_type("/I/*", VanillaOption)
+        kept = any_store.new(VanillaOption, "/I/kept")
+        kept.Strike.set(1.0)
+        kept.save()
+        any_store.new(VanillaOption, "/I/doomed")
+
+        with pytest.raises(RuntimeError):
+            with any_store.transaction():
+                any_store.new(VanillaOption, "/I/new")
+                kept.Strike.set(2.0)
+                kept.save()
+                del any_store["/I/doomed"]
+                raise RuntimeError("boom")
+
+        assert "/I/new" not in any_store
+        assert "/I/doomed" in any_store
+        assert any_store["/I/kept"].Strike() == 1.0
+
+    def test_commit_keeps_everything(self, any_store):
+        any_store.register_type("/I/*", VanillaOption)
+        with any_store.transaction():
+            option = any_store.new(VanillaOption, "/I/a")
+            option.Strike.set(42.0)
+            option.save()
+
+        any_store.clear_cache()
+        assert any_store["/I/a"].Strike() == 42.0
+
+    def test_writes_outside_a_transaction_persist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            url = f"sqlite:///{os.path.join(tmp, 'store.db')}"
+            store = connect(url)
+            store.register_type("/I/*", VanillaOption)
+            store.new(VanillaOption, "/I/a")
+            store.close()
+
+            store = connect(url)
+            assert "/I/a" in store
+            store.close()
+
+
+class TestPathMatchingOnEveryBackend:
+    """list() and query() treat paths literally on both backends."""
+
+    @pytest.fixture
+    def populated(self, any_store):
+        for path in ("/A_B/x", "/AXB/y", "/a_b/z", "/A%B/w", "/A_B/sub/deep"):
+            any_store[path] = VanillaOption()
+        return any_store
+
+    def test_list_does_not_treat_underscore_as_wildcard(self, populated):
+        assert list(populated.list("/A_B")) == ["/A_B/x"]
+        assert list(populated.list("/A_B", recursive=True)) == [
+            "/A_B/sub/deep",
+            "/A_B/x",
+        ]
+
+    def test_list_does_not_treat_percent_as_wildcard(self, populated):
+        assert list(populated.list("/A%B")) == ["/A%B/w"]
+
+    def test_list_is_case_sensitive(self, populated):
+        assert list(populated.list("/a_b")) == ["/a_b/z"]
+
+    def test_query_negated_character_class(self, any_store):
+        any_store["/I/a"] = VanillaOption()
+        any_store["/I/x"] = VanillaOption()
+        assert list(any_store.query("/I/[!a]")) == ["/I/x"]
+
+
+class TestTypePatternPrecedence:
+    """The most specific matching pattern decides the type."""
+
+    def test_specific_pattern_registered_later(self):
+        store = connect("memory://")
+        store.register_type("/I/*", VanillaOption)
+        store.register_type("/I/Bonds/*", Bond)
+
+        store["/I/Bonds/UST"] = Bond()
+        store["/I/AAPL"] = VanillaOption()
+        store.clear_cache()
+        assert isinstance(store["/I/Bonds/UST"], Bond)
+        assert isinstance(store["/I/AAPL"], VanillaOption)
+
+    def test_specific_pattern_registered_first(self):
+        registry = TypeRegistry()
+        registry.register("/I/Bonds/*", Bond)
+        registry.register("/I/*", VanillaOption)
+        assert registry.get_type("/I/Bonds/UST") is Bond
+        assert registry.get_type("/I/AAPL") is VanillaOption
+
+    def test_equally_specific_patterns_use_registration_order(self):
+        registry = TypeRegistry()
+        registry.register("/I/*", VanillaOption)
+        registry.register("/I/?*", Bond)
+        assert registry.get_type("/I/AAPL") is VanillaOption
+
+
+class TestSqliteUrl:
+    """A malformed SQLite URL fails loudly instead of losing data."""
+
+    def test_two_slash_url_rejected(self):
+        with pytest.raises(ValueError, match="three slashes"):
+            connect("sqlite://trading.db")
+
+    def test_three_slash_relative_and_memory(self):
+        store = connect("sqlite:///:memory:")
+        store["/I/a"] = VanillaOption()
+        assert "/I/a" in store
+        store.close()
+
+    def test_four_slash_absolute_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "abs.db")
+            store = connect(f"sqlite:///{path}")
+            store["/I/a"] = VanillaOption()
+            store.close()
+            assert os.path.exists(path)
+
+
+class TestObjectTracking:
+    """The store tracks exactly the objects that are currently stored."""
+
+    @pytest.fixture
+    def store(self):
+        store = connect("memory://")
+        store.register_type("/I/*", VanillaOption)
+        yield store
+        store.close()
+
+    def test_replaced_object_is_untracked(self, store):
+        first, second = VanillaOption(), VanillaOption()
+        store["/I/A"] = first
+        store["/I/A"] = second
+
+        assert first.path() is None
+        assert store.get_path(first) is None
+        with pytest.raises(ValueError):
+            store.save(first)
+        assert store.get_path(second) == "/I/A"
+        assert len(store._object_paths) == 1
+
+    def test_object_moved_to_new_path_survives_deleting_the_old(self, store):
+        option = VanillaOption()
+        option.Strike.set(7.0)
+        store["/I/X"] = option
+        store["/I/Y"] = option
+
+        del store["/I/X"]
+        assert option.path() == "/I/Y"
+        option.Strike.set(8.0)
+        option.save()
+        store.clear_cache()
+        assert store["/I/Y"].Strike() == 8.0
+
+    def test_old_path_keeps_its_saved_copy(self, store):
+        option = VanillaOption()
+        option.Strike.set(7.0)
+        store["/I/X"] = option
+        store["/I/Y"] = option
+
+        copy = store["/I/X"]
+        assert copy is not option
+        assert copy.Strike() == 7.0

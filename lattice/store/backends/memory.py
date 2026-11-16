@@ -76,7 +76,7 @@ class MemoryBackend(StorageBackend):
     def query(self, pattern: str) -> Iterator[str]:
         """Query paths matching glob pattern."""
         for path in sorted(self._data.keys()):
-            if fnmatch.fnmatch(path, pattern):
+            if fnmatch.fnmatchcase(path, pattern):
                 yield path
 
     # Transaction support - memory backend uses simple copy-on-write

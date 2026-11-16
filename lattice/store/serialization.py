@@ -37,7 +37,8 @@ class TypeRegistry:
             pattern: Path pattern with wildcards (e.g., "/Instruments/*")
             cls: The Model class to instantiate for matching paths
 
-        Patterns are matched in registration order (first match wins).
+        When several patterns match a path, the most specific one wins (see
+        get_type), so the order of registration does not matter.
         """
         self._patterns.append((pattern, cls))
         self._type_to_pattern[cls] = pattern
@@ -48,13 +49,27 @@ class TypeRegistry:
         Args:
             path: Object path (e.g., "/Instruments/AAPL_C_150")
 
+        When several patterns match, the most specific wins: the one with
+        the most literal (non-wildcard) characters. "/I/Bonds/*" therefore
+        beats "/I/*" for "/I/Bonds/UST" whichever was registered first. Equally
+        specific patterns fall back to registration order.
+
         Returns:
             The registered Model class, or None if no pattern matches
         """
+        best: Optional[Type[dag.Model]] = None
+        best_score = -1
         for pattern, cls in self._patterns:
-            if fnmatch.fnmatch(path, pattern):
-                return cls
-        return None
+            if fnmatch.fnmatchcase(path, pattern):
+                score = self._specificity(pattern)
+                if score > best_score:
+                    best, best_score = cls, score
+        return best
+
+    @staticmethod
+    def _specificity(pattern: str) -> int:
+        """Number of literal characters in a pattern (wildcards excluded)."""
+        return sum(1 for ch in pattern if ch not in "*?[]!")
 
     def get_pattern(self, cls: Type[dag.Model]) -> Optional[str]:
         """Get the registered pattern for a Model type.

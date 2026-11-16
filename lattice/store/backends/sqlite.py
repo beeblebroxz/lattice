@@ -33,7 +33,13 @@ class SQLiteBackend(StorageBackend):
             path: Database file path, or ":memory:" for in-memory database
         """
         self._path = path
-        self._conn = sqlite3.connect(path, check_same_thread=False)
+        # isolation_level=None puts the connection in autocommit mode: each
+        # statement commits on its own unless we have issued BEGIN ourselves.
+        # That keeps transaction boundaries explicit (see begin_transaction),
+        # so writes inside a transaction really can be rolled back.
+        self._conn = sqlite3.connect(
+            path, check_same_thread=False, isolation_level=None
+        )
         self._conn.row_factory = sqlite3.Row
         self._create_tables()
 
@@ -60,7 +66,6 @@ class SQLiteBackend(StorageBackend):
             CREATE INDEX IF NOT EXISTS idx_objects_path ON objects(path)
             """
         )
-        self._conn.commit()
 
     def _migrate_schema(self) -> None:
         """Add schema_version column to existing databases if missing."""
@@ -114,14 +119,12 @@ class SQLiteBackend(StorageBackend):
                 obj.updated_at,
             ),
         )
-        self._conn.commit()
 
     def delete(self, path: str) -> bool:
         """Delete object at path."""
         cursor = self._conn.execute(
             "DELETE FROM objects WHERE path = ?", (path,)
         )
-        self._conn.commit()
         return cursor.rowcount > 0
 
     def exists(self, path: str) -> bool:
@@ -137,10 +140,14 @@ class SQLiteBackend(StorageBackend):
         if not prefix.endswith("/"):
             prefix = prefix + "/"
 
-        # Use LIKE for prefix matching
+        # Range scan on the primary key: every path starting with "prefix/"
+        # sorts between "prefix/" and "prefix0" ("0" is the character after
+        # "/"). Unlike LIKE, this is exact: "_" and "%" in a path are literal
+        # and the match is case-sensitive.
+        upper = prefix[:-1] + chr(ord("/") + 1)
         cursor = self._conn.execute(
-            "SELECT path FROM objects WHERE path LIKE ? ORDER BY path",
-            (prefix + "%",),
+            "SELECT path FROM objects WHERE path >= ? AND path < ? ORDER BY path",
+            (prefix, upper),
         )
 
         for row in cursor:
@@ -160,11 +167,11 @@ class SQLiteBackend(StorageBackend):
         Note: SQLite GLOB is case-sensitive and uses * and ? wildcards,
         matching fnmatch behavior.
         """
-        # Convert fnmatch pattern to SQL GLOB pattern
-        # fnmatch uses * and ? which map directly to GLOB
+        # fnmatch's * and ? map directly to GLOB. Character-class negation
+        # differs: fnmatch writes [!abc], GLOB writes [^abc].
         cursor = self._conn.execute(
             "SELECT path FROM objects WHERE path GLOB ? ORDER BY path",
-            (pattern,),
+            (pattern.replace("[!", "[^"),),
         )
 
         for row in cursor:
@@ -174,16 +181,16 @@ class SQLiteBackend(StorageBackend):
 
     def begin_transaction(self) -> Any:
         """Begin a transaction."""
-        self._conn.execute("BEGIN TRANSACTION")
+        self._conn.execute("BEGIN")
         return True
 
     def commit_transaction(self, handle: Any) -> None:
         """Commit transaction."""
-        self._conn.commit()
+        self._conn.execute("COMMIT")
 
     def rollback_transaction(self, handle: Any) -> None:
         """Rollback transaction."""
-        self._conn.rollback()
+        self._conn.execute("ROLLBACK")
 
     @property
     def supports_transactions(self) -> bool:

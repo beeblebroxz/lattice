@@ -70,6 +70,12 @@ db.register_type("/Positions/*/*", Position)  # Nested: /Positions/{book}/{symbo
 - `pattern` - Glob pattern for paths (e.g., `/Instruments/*`)
 - `cls` - The `dag.Model` subclass
 
+`*` matches across `/`, so `/Instruments/*` also covers
+`/Instruments/Bonds/UST`. When several patterns match a path, the most
+specific one (the most literal characters) wins, whatever the order of
+registration: register `/Instruments/Bonds/*` for `Bond` and it takes
+precedence over `/Instruments/*` there.
+
 ### CRUD Operations
 
 #### `db[path] = obj`
@@ -197,6 +203,10 @@ with db.transaction():
     db["/Positions/DESK/AAPL"] = position
     # Both committed atomically, or both rolled back
 ```
+
+If the block raises, every write and delete made inside it is undone on both
+the SQLite and memory backends. Objects you changed in memory keep their new
+values; reload them from the store if you need the saved state.
 
 ### Lifecycle
 
