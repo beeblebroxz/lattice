@@ -2,10 +2,11 @@
 
 import os
 import tempfile
+from datetime import datetime
 import pytest
 import dag
 
-from lattice import VanillaOption, Stock, Bond, Book, Position
+from lattice import VanillaOption, Stock, Bond, Book, Position, Trade, TradingSystem
 from lattice.store import (
     Store,
     connect,
@@ -659,6 +660,126 @@ class TestObjectSelfAwareness:
         memory_store.save(obj)
         memory_store.clear_cache()
         assert memory_store["/Plain/A"].Value() == 2.0
+
+
+class TestTradingModelPersistence:
+    """Book, Trade and Position survive a save and reload."""
+
+    @pytest.fixture
+    def db_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            yield os.path.join(tmp, "trading.db")
+
+    def _connect(self, db_path):
+        store = connect(f"sqlite:///{db_path}")
+        store.register_type("/Books/*", Book)
+        store.register_type("/Trades/*", Trade)
+        store.register_type("/Positions/*/*", Position)
+        return store
+
+    def test_book_round_trip(self, db_path):
+        store = self._connect(db_path)
+        book = store.new(Book, "/Books/DESK")
+        book.BookId.set("DESK")
+        book.Name.set("Options Desk")
+        book.BookType.set("hedge")
+        book.ParentBookId.set("FIRM")
+        book.save()
+        store.close()
+
+        store = self._connect(db_path)
+        loaded = store["/Books/DESK"]
+        assert loaded.BookId() == "DESK"
+        assert loaded.Name() == "Options Desk"
+        assert loaded.BookType() == "hedge"
+        assert loaded.ParentBookId() == "FIRM"
+        assert loaded.Positions() == []
+        store.close()
+
+    def test_trade_round_trip(self, db_path):
+        ts = datetime(2026, 3, 4, 9, 30, 15)
+        store = self._connect(db_path)
+        trade = store.new(Trade, "/Trades/7")
+        trade.TradeId.set(7)
+        trade.Symbol.set("AAPL_C_150")
+        trade.Quantity.set(10)
+        trade.Price.set(5.25)
+        trade.BuyerBookId.set("DESK")
+        trade.SellerBookId.set("CLIENT")
+        trade.Timestamp.set(ts)
+        trade.MarketPrice.set(6.00)
+        trade.save()
+        store.close()
+
+        store = self._connect(db_path)
+        loaded = store["/Trades/7"]
+        assert loaded.TradeId() == 7
+        assert loaded.Symbol() == "AAPL_C_150"
+        assert loaded.Quantity() == 10
+        assert loaded.Price() == 5.25
+        assert loaded.BuyerBookId() == "DESK"
+        assert loaded.SellerBookId() == "CLIENT"
+        assert loaded.Timestamp() == ts
+        assert loaded.Notional() == 52.5
+        # Market price is transient: back to the trade price, so no P&L.
+        assert loaded.MarketPrice() == 5.25
+        assert loaded.BuyerPnL() == 0.0
+        store.close()
+
+    def test_position_round_trip(self, db_path):
+        store = self._connect(db_path)
+        pos = store.new(Position, "/Positions/DESK/AAPL_C_150")
+        pos.Symbol.set("AAPL_C_150")
+        pos.BookId.set("DESK")
+        pos.Quantity.set(-10)
+        pos.AvgPrice.set(5.25)
+        pos.MarketPrice.set(6.00)
+        pos.LinkedInstrument.set(VanillaOption())
+        pos.save()
+        store.close()
+
+        store = self._connect(db_path)
+        loaded = store["/Positions/DESK/AAPL_C_150"]
+        assert loaded.Symbol() == "AAPL_C_150"
+        assert loaded.BookId() == "DESK"
+        assert loaded.Quantity() == -10
+        assert loaded.AvgPrice() == 5.25
+        assert loaded.IsShort()
+        # Market price and the instrument link are transient.
+        assert loaded.MarketPrice() == 5.25
+        assert loaded.LinkedInstrument() is None
+        assert loaded.UnrealizedPnL() == 0.0
+
+        # Marking it again restores P&L.
+        loaded.MarketPrice.set(6.00)
+        assert loaded.UnrealizedPnL() == pytest.approx(-7.5)
+        store.close()
+
+    def test_system_positions_can_be_saved(self, db_path):
+        """Models built by a TradingSystem save and reload with their state."""
+        system = TradingSystem()
+        desk = system.book("DESK", name="Options Desk")
+        client = system.book("CLIENT", book_type="customer")
+        system.trade(desk, client, "AAPL_C_150", 10, 5.00)
+        system.trade(desk, client, "AAPL_C_150", 10, 6.00)
+
+        store = self._connect(db_path)
+        for book in system.books:
+            store[f"/Books/{book.BookId()}"] = book
+            for pos in book.Positions():
+                store[f"/Positions/{book.BookId()}/{pos.Symbol()}"] = pos
+        for trade in system.trades:
+            store[f"/Trades/{trade.TradeId()}"] = trade
+        store.close()
+
+        store = self._connect(db_path)
+        assert store["/Books/CLIENT"].BookType() == "customer"
+        assert sorted(store.query("/Trades/*")) == ["/Trades/1", "/Trades/2"]
+        pos = store["/Positions/DESK/AAPL_C_150"]
+        assert pos.Quantity() == 20
+        assert pos.AvgPrice() == 5.50
+        assert store["/Positions/CLIENT/AAPL_C_150"].Quantity() == -20
+        store.close()
 
 
 class TestStoreNew:

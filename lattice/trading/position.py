@@ -28,22 +28,22 @@ class Position(Storable, dag.Model):
 
     # ==================== Inputs ====================
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def Symbol(self) -> str:
         """Instrument symbol."""
         return ""
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def BookId(self) -> str:
         """Book ID this position belongs to."""
         return ""
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def Quantity(self) -> int:
         """Position quantity. Positive = long, negative = short."""
         return 0
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def AvgPrice(self) -> float:
         """Average entry price."""
         return 0.0

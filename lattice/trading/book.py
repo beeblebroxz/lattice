@@ -41,22 +41,22 @@ class Book(Storable, dag.Model):
 
     # ==================== Inputs ====================
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def BookId(self) -> str:
         """Unique book identifier."""
         return ""
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def Name(self) -> str:
         """Human-readable book name."""
         return ""
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def BookType(self) -> str:
         """Book type: 'trading', 'customer', 'house', or 'hedge'."""
         return "trading"
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def ParentBookId(self) -> str:
         """Parent book ID for hierarchy roll-up (optional)."""
         return ""

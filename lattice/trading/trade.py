@@ -31,37 +31,37 @@ class Trade(Storable, dag.Model):
 
     # ==================== Inputs ====================
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def TradeId(self) -> int:
         """Unique trade identifier."""
         return 0
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def Symbol(self) -> str:
         """Instrument symbol."""
         return ""
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def Quantity(self) -> int:
         """Number of units traded (always positive)."""
         return 0
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def Price(self) -> float:
         """Execution price."""
         return 0.0
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def BuyerBookId(self) -> str:
         """Book ID of the buyer."""
         return ""
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def SellerBookId(self) -> str:
         """Book ID of the seller."""
         return ""
 
-    @dag.computed(dag.Input)
+    @dag.computed(dag.Persisted)
     def Timestamp(self) -> datetime:
         """Trade execution timestamp."""
         return datetime.now()

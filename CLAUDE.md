@@ -310,7 +310,11 @@ pytest --ignore=tests/test_ui.py
 
 ## Serialization Notes
 
-- Only `dag.Input` fields are persisted (settable state)
+- Only `dag.Persisted` fields are saved; plain `dag.Input` fields (market data)
+  revert to defaults on load
+- `Book`, `Trade`, `Position` persist identity and economics (IDs, symbol,
+  quantity, prices, timestamp), not `MarketPrice`, `LinkedInstrument`, or a
+  book's position list; the store does not rebuild a `TradingSystem`
 - Computed values are recalculated on load
 - Supported types: primitives, list, dict, datetime
 - Model references: store the path, not the object

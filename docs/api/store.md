@@ -312,18 +312,39 @@ Recommended path structure:
 
 ## Serialization
 
-Only `dag.Input` fields are persisted. Computed values are recalculated on load.
+Only `dag.Persisted` fields are saved. Plain `dag.Input` fields (typically
+market data) and computed values are not: inputs revert to their defaults on
+load and computed values are recalculated.
 
 ```python
 class MyModel(dag.Model):
-    @dag.computed(dag.Input)  # Persisted
+    @dag.computed(dag.Persisted)  # Saved
     def Strike(self):
         return 100.0
 
-    @dag.computed  # NOT persisted - recalculated
+    @dag.computed(dag.Input | dag.Overridable)  # NOT saved - market data
+    def Spot(self):
+        return 100.0
+
+    @dag.computed  # NOT saved - recalculated
     def Price(self):
         return self.calculate_price()
 ```
+
+### Trading models
+
+`Book`, `Trade` and `Position` persist their identity and economics. Market
+prices and links to live objects are not saved, and are set again after load.
+
+| Class | Persisted | Not persisted |
+|-------|-----------|---------------|
+| `Book` | `BookId`, `Name`, `BookType`, `ParentBookId` | its list of positions |
+| `Trade` | `TradeId`, `Symbol`, `Quantity`, `Price`, `BuyerBookId`, `SellerBookId`, `Timestamp` | `MarketPrice` |
+| `Position` | `Symbol`, `BookId`, `Quantity`, `AvgPrice` | `MarketPrice`, `LinkedInstrument` |
+
+A `Book` loaded from the store is a standalone record: `Positions()` is empty
+until a `TradingSystem` populates it. The store does not save or rebuild a
+`TradingSystem`; store its books, trades and positions individually.
 
 Supported types:
 - Primitives: `str`, `int`, `float`, `bool`, `None`
