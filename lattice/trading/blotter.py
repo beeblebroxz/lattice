@@ -1,8 +1,12 @@
 """Trade blotter using livetable."""
 
-from typing import Iterator, Callable, Optional
+import re
+from typing import Iterator, Callable, List, Optional
 from datetime import datetime
 import livetable
+
+# Symbols that can be embedded in a livetable filter expression as-is.
+_SIMPLE_SYMBOL = re.compile(r"^[A-Za-z0-9_.:/ -]+$")
 
 
 class TradeBlotter:
@@ -88,17 +92,33 @@ class TradeBlotter:
         filtered = self._table.filter(predicate)
         return TradeBlotterView(filtered)
 
+    def _where(self, expression: str) -> "TradeBlotterView":
+        """Trades matching a livetable filter expression.
+
+        The expression is evaluated in livetable itself, with no Python call
+        per row, which is far faster than filter() with a lambda.
+        """
+        return TradeBlotterView(_Rows(self._table, self._table.filter_expr(expression)))
+
     def by_symbol(self, symbol: str) -> "TradeBlotterView":
         """Get all trades for a specific symbol."""
-        return self.filter(lambda r: r["symbol"] == symbol)
+        if not _SIMPLE_SYMBOL.match(symbol):
+            # Not safely quotable in a filter expression.
+            return self.filter(lambda r: r["symbol"] == symbol)
+        return self._where(f"symbol == '{symbol}'")
 
     def buys(self) -> "TradeBlotterView":
         """Get all buy trades."""
-        return self.filter(lambda r: r["side"] == "BUY")
+        return self._where("side == 'BUY'")
 
     def sells(self) -> "TradeBlotterView":
         """Get all sell trades."""
-        return self.filter(lambda r: r["side"] == "SELL")
+        return self._where("side == 'SELL'")
+
+    def tail(self, n: int) -> List[dict]:
+        """The most recent n trades, oldest first."""
+        total = len(self._table)
+        return [self._table[i] for i in range(max(0, total - n), total)]
 
     def __len__(self) -> int:
         """Return the number of trades."""
@@ -119,13 +139,19 @@ class TradeBlotter:
         return self._table.sum("notional")
 
 
-    def show(self, port: int = 8080, open_browser: bool = True) -> None:
+    def show(
+        self, port: int = 8080, open_browser: bool = True, max_rows: int = 1000
+    ) -> None:
         """
         Display the trade blotter in a web browser.
+
+        The page refreshes every second, so it shows only the most recent
+        max_rows trades; the header still reports totals for all of them.
 
         Args:
             port: Server port (default 8080)
             open_browser: Whether to open browser automatically
+            max_rows: Most recent trades to display
 
         Example:
             blotter = TradeBlotter()
@@ -155,7 +181,7 @@ class TradeBlotter:
                     "price": t["price"],
                     "notional": t["notional"],
                 }
-                for t in self
+                for t in self.tail(max_rows)
             ]
 
         def get_stats():
@@ -174,6 +200,20 @@ class TradeBlotter:
             port=port,
             open_browser=open_browser,
         )
+
+
+class _Rows:
+    """Selected rows of a table, by index: the minimal view interface."""
+
+    def __init__(self, table, indices):
+        self._table = table
+        self._indices = indices
+
+    def __len__(self) -> int:
+        return len(self._indices)
+
+    def __getitem__(self, index: int) -> dict:
+        return self._table[self._indices[index]]
 
 
 class TradeBlotterView:

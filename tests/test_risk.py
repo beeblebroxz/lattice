@@ -889,3 +889,70 @@ class TestVaRConfidence:
 
     def test_report_keeps_explicit_zero_volatility(self, book):
         assert risk.var_report(book, volatility=0.0)["volatility"] == 0.0
+
+
+class TestDeltaGamma:
+    """delta_gamma returns exactly what delta() and gamma() return."""
+
+    @pytest.mark.parametrize("bump", [0.01, 0.1, 1.0])
+    def test_matches_separate_functions(self, bump):
+        option = VanillaOption()
+        option.Spot.set(103.0)
+        delta, gamma = risk.delta_gamma(option, bump=bump)
+        assert delta == pytest.approx(risk.delta(option, bump=bump), rel=1e-12)
+        assert gamma == pytest.approx(risk.gamma(option, bump=bump), rel=1e-12)
+
+    def test_output_name(self):
+        forward = Forward()
+        delta, gamma = risk.delta_gamma(forward, output_name="MarketValue")
+        assert delta == pytest.approx(forward.Delta(), rel=1e-6)
+        assert gamma == pytest.approx(0.0, abs=1e-6)
+
+    def test_engine_uses_the_same_numbers(self):
+        option = VanillaOption()
+        engine = RiskEngine()
+        engine.add(option, "opt")
+        greeks = engine.compute_greeks()["opt"]
+        assert greeks["delta"] == pytest.approx(risk.delta(option))
+        assert greeks["gamma"] == pytest.approx(risk.gamma(option))
+
+    def test_leaves_instrument_unchanged(self):
+        option = VanillaOption()
+        before = option.Price()
+        risk.delta_gamma(option)
+        assert option.Spot() == 100.0
+        assert option.Price() == before
+
+
+class TestSharedBasePnL:
+    """Sharing the base valuation across scenarios does not change results."""
+
+    @pytest.fixture
+    def book(self):
+        system = TradingSystem()
+        desk, client = system.book("DESK"), system.book("CLIENT")
+        for i in range(4):
+            option = VanillaOption()
+            option.Strike.set(95.0 + 5 * i)
+            system.register_instrument(f"OPT{i}", option)
+            system.trade(desk, client, f"OPT{i}", 10, option.Price() - 1.0)
+        system.trade(desk, client, "PLAIN", 100, 5.0)
+        return desk
+
+    def test_run_all_matches_running_each_alone(self, book):
+        together = risk.run_all_scenarios(book)
+        for name in risk.list_scenarios():
+            alone = risk.run_scenario(book, name)
+            assert together[name]["base_pnl"] == pytest.approx(alone["base_pnl"])
+            assert together[name]["stressed_pnl"] == pytest.approx(alone["stressed_pnl"])
+            assert together[name]["pnl_impact"] == pytest.approx(alone["pnl_impact"])
+
+    def test_book_is_unchanged_afterwards(self, book):
+        before = book.TotalPnL()
+        risk.run_all_scenarios(book)
+        assert book.TotalPnL() == pytest.approx(before)
+
+    def test_explicit_base_is_used(self, book):
+        result = risk.stress(book, spot_shock=-0.1, base_pnl=1000.0)
+        assert result["base_pnl"] == 1000.0
+        assert result["pnl_impact"] == pytest.approx(result["stressed_pnl"] - 1000.0)

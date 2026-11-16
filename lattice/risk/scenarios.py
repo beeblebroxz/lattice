@@ -16,7 +16,7 @@ Example:
         print(f"{name}: ${result['pnl_impact']:+,.2f}")
 """
 
-from typing import TYPE_CHECKING, Dict, Any
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from .portfolio import stress
 
@@ -77,7 +77,9 @@ SCENARIOS: Dict[str, Dict[str, float]] = {
 }
 
 
-def run_scenario(book: "Book", scenario_name: str) -> Dict[str, Any]:
+def run_scenario(
+    book: "Book", scenario_name: str, base_pnl: Optional[float] = None
+) -> Dict[str, Any]:
     """Run a predefined stress scenario on a book.
 
     Scenarios may include spot, vol, and rate legs. They are passed through to
@@ -89,6 +91,7 @@ def run_scenario(book: "Book", scenario_name: str) -> Dict[str, Any]:
     Args:
         book: Book with positions to analyze
         scenario_name: Name of scenario from SCENARIOS dict
+        base_pnl: The book's current TotalPnL, if already known (see stress)
 
     Returns:
         dict with base_pnl, stressed_pnl, pnl_impact, scenario name, and the
@@ -102,7 +105,7 @@ def run_scenario(book: "Book", scenario_name: str) -> Dict[str, Any]:
         raise KeyError(f"Unknown scenario '{scenario_name}'. Available: {available}")
 
     params = SCENARIOS[scenario_name]
-    result = stress(book, **params)
+    result = stress(book, base_pnl=base_pnl, **params)
     result["scenario"] = scenario_name
     return result
 
@@ -116,7 +119,9 @@ def run_all_scenarios(book: "Book") -> Dict[str, Dict[str, Any]]:
     Returns:
         dict mapping scenario name to result dict
     """
-    return {name: run_scenario(book, name) for name in SCENARIOS}
+    # Value the unstressed book once and share it across the scenarios.
+    base_pnl = book.TotalPnL()
+    return {name: run_scenario(book, name, base_pnl=base_pnl) for name in SCENARIOS}
 
 
 def list_scenarios() -> Dict[str, Dict[str, float]]:

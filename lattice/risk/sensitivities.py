@@ -18,7 +18,7 @@ Example:
     print(risk.delta(option))
 """
 
-from typing import Optional
+from typing import Optional, Tuple
 import dag
 
 # Size of the move that vega and rho are quoted against (1% = 0.01).
@@ -163,6 +163,42 @@ def gamma(
 
     # Central difference formula for second derivative
     return (price_up - 2 * base_price + price_down) / (bump * bump)
+
+
+def delta_gamma(
+    instrument: dag.Model, bump: float = 0.01, output_name: Optional[str] = None
+) -> Tuple[float, float]:
+    """Compute delta and gamma together from one up/down spot bump.
+
+    Returns exactly what delta() and gamma() return, but with two bumped
+    valuations instead of three.
+
+    Args:
+        instrument: Any dag.Model with Spot and Price (or MarketValue)
+        bump: Spot bump size (default $0.01)
+        output_name: Output to measure (default Price, else MarketValue)
+
+    Returns:
+        (delta, gamma)
+    """
+    spot_accessor = getattr(instrument, "Spot")
+    price_accessor = getattr(instrument, _output(instrument, output_name))
+
+    base_spot = spot_accessor()
+    base_price = price_accessor()
+
+    with dag.scenario():
+        spot_accessor.override(base_spot + bump)
+        price_up = price_accessor()
+
+    with dag.scenario():
+        spot_accessor.override(base_spot - bump)
+        price_down = price_accessor()
+
+    return (
+        (price_up - base_price) / bump,
+        (price_up - 2 * base_price + price_down) / (bump * bump),
+    )
 
 
 def vega(

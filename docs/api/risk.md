@@ -28,6 +28,7 @@ print(f"Rho:   {risk.rho(option):.4f}")
 |----------|-------------|
 | `risk.delta(inst, bump=0.01)` | dPrice/dSpot |
 | `risk.gamma(inst, bump=0.01)` | d²Price/dSpot² |
+| `risk.delta_gamma(inst, bump=0.01)` | `(delta, gamma)` from one up/down bump; same values, less repricing |
 | `risk.vega(inst, bump=0.01)` | Price change per 1% vol move |
 | `risk.theta(inst, bump=1/365)` | Price change over the next day (zero at expiry) |
 | `risk.rho(inst, bump=0.01)` | Price change per 1% rate move |
@@ -118,6 +119,11 @@ reactively. For price-only positions, only `spot_shock` applies (to
 
 **Returns:** Dict with `base_pnl`, `stressed_pnl`, `pnl_impact`, `spot_shock`,
 `vol_shock`, `rate_shock`, `applied_shocks`, `skipped_shocks`.
+
+When running many stresses on the same book, pass `base_pnl=book.TotalPnL()`
+to each: a stress discards the book's cached values on the way out, so without
+it the whole book is repriced before every one. `run_all_scenarios` does this
+for you.
 
 ## Predefined Scenarios
 

@@ -3,7 +3,7 @@
 import asyncio
 import random
 import webbrowser
-from typing import Callable, List, Dict, Any, Optional
+from typing import Callable, List, Dict, Any, Optional, Tuple
 from aiohttp import web
 
 from .blotter import TradeBlotter
@@ -27,50 +27,57 @@ class TradingDashboard:
         dashboard.show(simulate=True)  # Adds random trades every second
     """
 
+    # Most recent trades sent to the browser on each refresh.
+    MAX_TRADE_ROWS = 1000
+
     def __init__(self):
         self.blotter = TradeBlotter()
         self.positions = PositionTable()
+        # symbol -> (signed quantity, average entry price)
+        self._holdings: Dict[str, Tuple[int, float]] = {}
 
     def record(self, symbol: str, side: str, quantity: int, price: float) -> int:
         """Record a trade and update positions."""
         trade_id = self.blotter.record(symbol, side, quantity, price)
-        self._update_positions()
+        self._update_position(symbol, quantity if side == "BUY" else -quantity, price)
         return trade_id
 
-    def _update_positions(self) -> None:
-        """Recalculate positions from all trades."""
-        # Aggregate trades into positions
-        position_map: Dict[str, Dict[str, float]] = {}
+    def _update_position(self, symbol: str, quantity_delta: int, price: float) -> None:
+        """Apply one trade to the position in its symbol.
 
-        for trade in self.blotter:
-            symbol = trade["symbol"]
-            qty = trade["quantity"] if trade["side"] == "BUY" else -trade["quantity"]
-            cost = trade["notional"] if trade["side"] == "BUY" else -trade["notional"]
+        Only the traded symbol is touched, so recording a trade costs the
+        same however many trades came before. Average price follows the same
+        rules as TradingSystem: adding re-averages, reducing keeps the entry
+        price, and trading through zero opens the remainder at the trade price.
+        """
+        old_qty, avg_price = self._holdings.get(symbol, (0, 0.0))
+        new_qty = old_qty + quantity_delta
 
-            if symbol not in position_map:
-                position_map[symbol] = {"quantity": 0, "total_cost": 0}
+        if new_qty == 0:
+            self._holdings.pop(symbol, None)
+            self.positions.remove(symbol)
+            return
 
-            position_map[symbol]["quantity"] += qty
-            position_map[symbol]["total_cost"] += cost
+        if old_qty == 0 or (old_qty > 0) == (quantity_delta > 0):
+            # Opening or adding: weighted average entry price
+            avg_price = (
+                abs(old_qty) * avg_price + abs(quantity_delta) * price
+            ) / abs(new_qty)
+        elif (old_qty > 0) != (new_qty > 0):
+            # Flipped through zero: the remainder was opened at this price
+            avg_price = price
+        self._holdings[symbol] = (new_qty, avg_price)
 
-        # Rebuild position table
-        self.positions = PositionTable()
-        for symbol, data in position_map.items():
-            qty = data["quantity"]
-            if qty != 0:
-                avg_price = abs(data["total_cost"] / qty)
-                # Simulate market price (±10% from avg)
-                market_price = avg_price * (1 + random.uniform(-0.1, 0.15))
-                market_value = qty * market_price
-                unrealized_pnl = market_value - (qty * avg_price)
-
-                self.positions.add(
-                    symbol,
-                    quantity=int(qty),
-                    avg_price=avg_price,
-                    market_value=market_value,
-                    unrealized_pnl=unrealized_pnl,
-                )
+        # Simulate market price (-10% to +15% from avg)
+        market_price = avg_price * (1 + random.uniform(-0.1, 0.15))
+        market_value = new_qty * market_price
+        self.positions.add(
+            symbol,
+            quantity=new_qty,
+            avg_price=avg_price,
+            market_value=market_value,
+            unrealized_pnl=market_value - new_qty * avg_price,
+        )
 
     def show(
         self,
@@ -123,7 +130,7 @@ class TradingDashboard:
                     "price": t["price"],
                     "notional": t["notional"],
                 }
-                for t in self.blotter
+                for t in self.blotter.tail(self.MAX_TRADE_ROWS)
             ]
             return web.json_response(trades)
 

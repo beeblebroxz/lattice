@@ -34,6 +34,7 @@ from .sensitivities import (
     sensitivity,
     delta,
     gamma,
+    delta_gamma,
     vega,
     theta,
     rho,
@@ -71,6 +72,7 @@ __all__ = [
     # Core sensitivities
     "sensitivity",
     "delta",
+    "delta_gamma",
     "gamma",
     "vega",
     "theta",

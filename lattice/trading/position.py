@@ -3,10 +3,34 @@
 A Position represents a holding in a single instrument for a book.
 """
 
+from typing import Dict
+
 import dag
 
 from lattice.store.storable import Storable
 
+
+def _position_greeks(inst, quantity: int) -> Dict[str, float]:
+    """Quantity-weighted numerical Greeks of a linked instrument.
+
+    A Greek is zero when there is no linked instrument or it lacks the input
+    the Greek is taken against (a bond has no Spot, a stock no Volatility).
+
+    The instrument and quantity are passed in, read by the calling node, so
+    that dag sees the node's dependencies.
+    """
+    from lattice.risk import sensitivities
+
+    greeks = {"delta": 0.0, "gamma": 0.0, "vega": 0.0}
+    if inst is None:
+        return greeks
+    if hasattr(inst, "Spot"):
+        delta, gamma = sensitivities.delta_gamma(inst, output_name="MarketValue")
+        greeks["delta"] = quantity * delta
+        greeks["gamma"] = quantity * gamma
+    if hasattr(inst, "Volatility"):
+        greeks["vega"] = quantity * sensitivities.vega(inst, output_name="MarketValue")
+    return greeks
 
 class Position(Storable, dag.Model):
     """A position in a single instrument for a book.
@@ -96,6 +120,37 @@ class Position(Storable, dag.Model):
     def TotalPnL(self) -> float:
         """Realized plus unrealized P&L."""
         return self.RealizedPnL() + self.UnrealizedPnL()
+
+    # ==================== Greeks ====================
+    # Position-level: quantity x the linked instrument's sensitivity, taken
+    # on MarketValue (what the position is marked at).
+    #
+    # All three are computed together in one cached node. Each Greek is a
+    # bump-and-reval inside a dag scenario, and a scenario on an instrument
+    # invalidates everything that depends on it; as separate nodes, computing
+    # gamma would throw away the cached delta, and so on. Together they are
+    # computed once and then reused until the instrument or quantity changes,
+    # so a tick on one instrument revalues only its own positions.
+
+    @dag.computed
+    def Greeks(self) -> Dict[str, float]:
+        """Position delta, gamma and vega as a dict (zeros where not applicable)."""
+        return _position_greeks(self.LinkedInstrument(), self.Quantity())
+
+    @dag.computed
+    def Delta(self) -> float:
+        """Position delta: quantity x instrument delta (0 if not applicable)."""
+        return self.Greeks()["delta"]
+
+    @dag.computed
+    def Gamma(self) -> float:
+        """Position gamma: quantity x instrument gamma (0 if not applicable)."""
+        return self.Greeks()["gamma"]
+
+    @dag.computed
+    def Vega(self) -> float:
+        """Position vega per 1% vol: quantity x instrument vega (0 if not applicable)."""
+        return self.Greeks()["vega"]
 
     @dag.computed
     def IsLong(self) -> bool:

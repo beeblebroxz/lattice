@@ -707,3 +707,142 @@ class TestTradeValidation:
         a, b = system.get_book("A"), system.get_book("B")
         system.trade(a, b, "SPREAD", 10, -2.5)
         assert system.positions_for(a)[0].AvgPrice() == -2.5
+
+
+class TestTradeIndexes:
+    """Per-symbol and per-book lookups return what a full scan would."""
+
+    @pytest.fixture
+    def system(self):
+        system = TradingSystem()
+        a, b, c = system.book("A"), system.book("B"), system.book("C")
+        system.trade(a, b, "X", 10, 5.0)
+        system.trade(b, c, "Y", 20, 2.5)
+        system.trade(c, a, "X", 5, 6.0)
+        return system
+
+    def test_trades_for_book(self, system):
+        a = system.get_book("A")
+        ids = [t.TradeId() for t in system.trades_for(a)]
+        assert ids == [1, 3]
+        expected = [
+            t.TradeId() for t in system.trades
+            if "A" in (t.BuyerBookId(), t.SellerBookId())
+        ]
+        assert ids == expected
+
+    def test_trades_for_returns_a_copy(self, system):
+        a = system.get_book("A")
+        system.trades_for(a).clear()
+        assert len(system.trades_for(a)) == 2
+
+    def test_trades_for_book_without_trades(self, system):
+        assert system.trades_for(system.book("EMPTY")) == []
+
+    def test_market_price_reaches_only_that_symbol(self, system):
+        system.set_market_price("X", 7.0)
+        by_symbol = {t.TradeId(): t for t in system.trades}
+        assert by_symbol[1].MarketPrice() == 7.0
+        assert by_symbol[3].MarketPrice() == 7.0
+        assert by_symbol[2].MarketPrice() == 2.5  # Y still at its trade price
+
+    def test_total_volume_matches_trade_notionals(self, system):
+        expected = sum(t.Notional() for t in system.trades)
+        assert system.total_volume() == pytest.approx(expected)
+        assert system.total_volume() == pytest.approx(10 * 5.0 + 20 * 2.5 + 5 * 6.0)
+
+    def test_total_volume_of_empty_system(self):
+        assert TradingSystem().total_volume() == 0.0
+
+
+class TestPositionGreeks:
+    """Positions carry their own Greeks, cached until their instrument moves."""
+
+    @pytest.fixture
+    def desk(self):
+        from lattice import VanillaOption
+
+        system = TradingSystem()
+        desk, client = system.book("DESK"), system.book("CLIENT")
+        options = []
+        for i in range(5):
+            option = VanillaOption()
+            option.Strike.set(90.0 + 5 * i)
+            system.register_instrument(f"OPT{i}", option)
+            system.trade(desk, client, f"OPT{i}", 10 * (i + 1), option.Price())
+            options.append(option)
+        return desk, options
+
+    @pytest.fixture
+    def pricings(self, monkeypatch):
+        """Count Black-Scholes valuations."""
+        import lattice.instruments.options as options_module
+
+        calls = [0]
+        real = options_module.black_scholes_price
+
+        def counting(*args, **kwargs):
+            calls[0] += 1
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(options_module, "black_scholes_price", counting)
+        return calls
+
+    def test_position_greeks_match_risk_functions(self, desk):
+        from lattice import risk
+
+        book, options = desk
+        for pos, option in zip(book.Positions(), options):
+            qty = pos.Quantity()
+            assert pos.Delta() == pytest.approx(qty * risk.delta(option))
+            assert pos.Gamma() == pytest.approx(qty * risk.gamma(option))
+            assert pos.Vega() == pytest.approx(qty * risk.vega(option))
+            assert pos.Greeks() == {
+                "delta": pos.Delta(), "gamma": pos.Gamma(), "vega": pos.Vega(),
+            }
+
+    def test_book_greeks_are_sums_of_position_greeks(self, desk):
+        book, _ = desk
+        positions = book.Positions()
+        assert book.Delta() == pytest.approx(sum(p.Delta() for p in positions))
+        assert book.Gamma() == pytest.approx(sum(p.Gamma() for p in positions))
+        assert book.Vega() == pytest.approx(sum(p.Vega() for p in positions))
+
+    def test_unlinked_position_has_zero_greeks(self):
+        pos = Position()
+        pos.Quantity.set(10)
+        assert pos.Greeks() == {"delta": 0.0, "gamma": 0.0, "vega": 0.0}
+
+    def test_greeks_do_not_evict_each_other(self, desk, pricings):
+        book, _ = desk
+        book.Delta(), book.Gamma(), book.Vega()
+
+        pricings[0] = 0
+        book.Delta(), book.Gamma(), book.Vega()
+        book.Delta()
+        assert pricings[0] == 0
+
+    def test_tick_revalues_only_the_moved_instrument(self, desk, pricings):
+        book, options = desk
+        book.Delta(), book.Gamma(), book.Vega()
+        pricings[0] = 0
+        book.Delta(), book.Gamma(), book.Vega()
+        all_cached = pricings[0]
+
+        options[2].Spot.set(101.0)
+        pricings[0] = 0
+        delta = book.Delta()
+        book.Gamma(), book.Vega()
+        one_position = pricings[0]
+
+        assert all_cached == 0
+        # One position's worth of bumps, not five.
+        assert 0 < one_position <= 10
+        assert delta == pytest.approx(sum(p.Delta() for p in book.Positions()))
+
+    def test_quantity_change_updates_greeks(self, desk):
+        book, options = desk
+        pos = book.Positions()[0]
+        before = pos.Delta()
+        pos.Quantity.set(pos.Quantity() * 2)
+        assert pos.Delta() == pytest.approx(2 * before)

@@ -324,3 +324,132 @@ class TestPortfolioGreeks:
         sys.trade(desk, client, "UST", 5, bond.MarketValue())
         assert desk.Delta() == 0.0          # bond has no Spot
         assert desk.Vega() == 0.0           # bond has no Volatility
+
+
+class TestBlotterQueries:
+    """Expression-based filters return the same rows as a Python scan."""
+
+    @pytest.fixture
+    def blotter(self):
+        blotter = TradeBlotter()
+        blotter.record("AAPL_C_150", "BUY", 10, 5.0)
+        blotter.record("GOOGL_C_140", "SELL", 20, 8.0)
+        blotter.record("AAPL_C_150", "SELL", 5, 5.5)
+        blotter.record("O'NEIL", "BUY", 1, 1.0)
+        blotter.record("AAPL_C_150", "BUY", 3, 5.25)
+        return blotter
+
+    def test_buys_and_sells(self, blotter):
+        assert [t["trade_id"] for t in blotter.buys()] == [1, 4, 5]
+        assert [t["trade_id"] for t in blotter.sells()] == [2, 3]
+        assert len(blotter.buys()) + len(blotter.sells()) == len(blotter)
+        assert blotter.buys()[0]["symbol"] == "AAPL_C_150"
+
+    def test_by_symbol(self, blotter):
+        assert [t["trade_id"] for t in blotter.by_symbol("AAPL_C_150")] == [1, 3, 5]
+        assert len(blotter.by_symbol("MISSING")) == 0
+
+    def test_by_symbol_with_a_quote_in_it(self, blotter):
+        assert [t["trade_id"] for t in blotter.by_symbol("O'NEIL")] == [4]
+
+    def test_tail(self, blotter):
+        assert [t["trade_id"] for t in blotter.tail(2)] == [4, 5]
+        assert len(blotter.tail(100)) == 5
+        assert blotter.tail(0) == []
+
+
+class TestPositionTableRemove:
+    """Removing a row keeps every other symbol pointing at its own row."""
+
+    def test_index_stays_consistent(self):
+        table = PositionTable()
+        for i in range(10):
+            table.add(f"S{i}", quantity=i + 1, avg_price=float(i))
+
+        assert table.remove("S3") is True
+        assert table.remove("S0") is True
+        assert table.remove("S9") is True
+        assert table.remove("S3") is False
+
+        assert len(table) == 7
+        assert table.get("S3") is None
+        for i in (1, 2, 4, 5, 6, 7, 8):
+            row = table.get(f"S{i}")
+            assert row["symbol"] == f"S{i}"
+            assert row["quantity"] == i + 1
+
+    def test_add_after_remove_updates_in_place(self):
+        table = PositionTable()
+        table.add("A", quantity=1, avg_price=1.0)
+        table.add("B", quantity=2, avg_price=2.0)
+        table.add("C", quantity=3, avg_price=3.0)
+        table.remove("A")
+
+        table.add("C", quantity=30, avg_price=3.5)
+        table.add("D", quantity=4, avg_price=4.0)
+        assert len(table) == 3
+        assert table.get("C")["quantity"] == 30
+        assert table.get("B")["quantity"] == 2
+        assert table.get("D")["quantity"] == 4
+
+
+class TestDashboardPositions:
+    """The dashboard keeps positions up to date one trade at a time."""
+
+    def test_average_price_on_adds_and_reductions(self):
+        from lattice.trading import TradingDashboard
+
+        dash = TradingDashboard()
+        dash.record("X", "BUY", 10, 5.0)
+        dash.record("X", "BUY", 10, 7.0)
+        assert dash.positions.get("X")["quantity"] == 20
+        assert dash.positions.get("X")["avg_price"] == pytest.approx(6.0)
+
+        # Selling keeps the entry price (it used to become |net cash| / qty).
+        dash.record("X", "SELL", 15, 10.0)
+        assert dash.positions.get("X")["quantity"] == 5
+        assert dash.positions.get("X")["avg_price"] == pytest.approx(6.0)
+
+    def test_close_flip_and_reopen(self):
+        from lattice.trading import TradingDashboard
+
+        dash = TradingDashboard()
+        dash.record("X", "BUY", 10, 5.0)
+        dash.record("X", "SELL", 10, 6.0)
+        assert dash.positions.get("X") is None
+        assert len(dash.positions) == 0
+
+        dash.record("X", "SELL", 4, 8.0)
+        assert dash.positions.get("X")["quantity"] == -4
+        assert dash.positions.get("X")["avg_price"] == pytest.approx(8.0)
+
+        dash.record("X", "BUY", 10, 9.0)  # through zero: long 6 at 9
+        assert dash.positions.get("X")["quantity"] == 6
+        assert dash.positions.get("X")["avg_price"] == pytest.approx(9.0)
+
+    def test_other_symbols_untouched(self):
+        from lattice.trading import TradingDashboard
+
+        dash = TradingDashboard()
+        dash.record("X", "BUY", 10, 5.0)
+        x_before = dash.positions.get("X")
+        dash.record("Y", "BUY", 1, 1.0)
+        assert dash.positions.get("X") == x_before
+        assert len(dash.blotter) == 2
+
+    def test_positions_match_a_full_replay(self):
+        import random
+        from lattice.trading import TradingDashboard
+
+        rng = random.Random(7)
+        dash = TradingDashboard()
+        net = {}
+        for _ in range(500):
+            symbol = rng.choice(["A", "B", "C", "D"])
+            side = rng.choice(["BUY", "SELL"])
+            qty = rng.randint(1, 9)
+            dash.record(symbol, side, qty, 10.0)
+            net[symbol] = net.get(symbol, 0) + (qty if side == "BUY" else -qty)
+
+        open_positions = {s: q for s, q in net.items() if q != 0}
+        assert {p["symbol"]: p["quantity"] for p in dash.positions} == open_positions

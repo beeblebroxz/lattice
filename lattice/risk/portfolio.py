@@ -19,7 +19,7 @@ Example:
     print(crash["pnl_impact"])
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 import dag
 
 from .shocks import shocked_value
@@ -65,6 +65,7 @@ def stress(
     spot_shock: float = 0.0,
     vol_shock: float = 0.0,
     rate_shock: float = 0.0,
+    base_pnl: Optional[float] = None,
 ) -> dict:
     """Apply spot/vol/rate shocks to a book and return the P&L impact.
 
@@ -80,8 +81,19 @@ def stress(
     (bonds) and ``DiscountRate`` (swaps), so books linked to any of them
     reprice on rate_shock. A swap's FloatingRate is the coupon already fixed
     for the current period, so a market rate move leaves it alone once set.
+
+    Args:
+        book: Book with positions to analyze
+        spot_shock: Relative spot move (-0.10 = -10%)
+        vol_shock: Relative volatility move
+        rate_shock: Absolute rate move (0.01 = +100bp)
+        base_pnl: The book's current TotalPnL, if the caller already has it.
+            Leaving a scenario discards the book's cached values, so when
+            running many stresses in a row, passing the base in saves
+            repricing the whole book before each one.
     """
-    base_pnl = book.TotalPnL()
+    if base_pnl is None:
+        base_pnl = book.TotalPnL()
     legs = {
         "spot_shock": (("Spot",), spot_shock),
         "vol_shock": (("Volatility",), vol_shock),

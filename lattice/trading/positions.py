@@ -82,18 +82,14 @@ class PositionTable:
         """
         if symbol not in self._symbol_to_row:
             return False
-        row_idx = self._symbol_to_row[symbol]
+        row_idx = self._symbol_to_row.pop(symbol)
         self._table.delete_row(row_idx)
-        # Rebuild index (row indices shift after delete)
-        self._rebuild_index()
+        # Rows after the deleted one move up by one. Shifting the index in
+        # place avoids reading every symbol back out of the table.
+        for sym, idx in self._symbol_to_row.items():
+            if idx > row_idx:
+                self._symbol_to_row[sym] = idx - 1
         return True
-
-    def _rebuild_index(self) -> None:
-        """Rebuild the symbol-to-row index."""
-        self._symbol_to_row.clear()
-        for i in range(len(self._table)):
-            symbol = self._table.get_value(i, "symbol")
-            self._symbol_to_row[symbol] = i
 
     def filter(self, predicate: Callable[[dict], bool]) -> "PositionTableView":
         """

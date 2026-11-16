@@ -14,9 +14,6 @@ from .position import Position
 if TYPE_CHECKING:
     from .system import TradingSystem
 
-# Instrument input each Greek requires; positions whose instrument lacks it skip.
-_GREEK_REQUIRES = {"delta": "Spot", "vega": "Volatility", "gamma": "Spot"}
-
 
 class Book(Storable, dag.Model):
     """A book holding positions with aggregated P&L.
@@ -150,39 +147,15 @@ class Book(Storable, dag.Model):
 
     @dag.computed
     def Delta(self) -> float:
-        """Aggregate delta: sum of quantity * instrument delta over linked positions."""
-        return self._book_greek("delta", self.Positions())
+        """Aggregate delta: sum of position deltas over linked positions."""
+        return sum(pos.Delta() for pos in self.Positions())
 
     @dag.computed
     def Vega(self) -> float:
-        """Aggregate vega across linked positions."""
-        return self._book_greek("vega", self.Positions())
+        """Aggregate vega (per 1% vol) across linked positions."""
+        return sum(pos.Vega() for pos in self.Positions())
 
     @dag.computed
     def Gamma(self) -> float:
         """Aggregate gamma across linked positions."""
-        return self._book_greek("gamma", self.Positions())
-
-    def _book_greek(self, name: str, positions: List[Position]) -> float:
-        """Quantity-weighted sum of a numerical Greek over linked positions.
-
-        Positions with no linked instrument, or whose instrument lacks the
-        required input (e.g. a bond has no Spot), contribute nothing.
-
-        The sensitivity is taken on the instrument's MarketValue, which is
-        what the position is marked at, so the aggregate is the sensitivity
-        of the book's own value.
-        """
-        from lattice.risk import sensitivities
-
-        required = _GREEK_REQUIRES.get(name)
-        if required is None:
-            raise ValueError(f"Unknown greek: {name!r}")
-        fn = getattr(sensitivities, name)
-        total = 0.0
-        for pos in positions:
-            inst = pos.LinkedInstrument()
-            if inst is None or not hasattr(inst, required):
-                continue
-            total += pos.Quantity() * fn(inst, output_name="MarketValue")
-        return total
+        return sum(pos.Gamma() for pos in self.Positions())

@@ -66,6 +66,7 @@ class TradingSystem:
             ("symbol", livetable.ColumnType.STRING, False),
             ("quantity", livetable.ColumnType.INT64, False),
             ("price", livetable.ColumnType.FLOAT64, False),
+            ("notional", livetable.ColumnType.FLOAT64, False),
             ("buyer_book_id", livetable.ColumnType.STRING, False),
             ("seller_book_id", livetable.ColumnType.STRING, False),
             ("timestamp", livetable.ColumnType.STRING, False),
@@ -74,6 +75,11 @@ class TradingSystem:
 
         # Trade dag.Model instances for reactive P&L
         self._trades: List[Trade] = []
+
+        # The same trades indexed by symbol and by book, so a price tick or a
+        # per-book query does not scan every trade.
+        self._symbol_trades: Dict[str, List[Trade]] = {}
+        self._book_trades: Dict[str, List[Trade]] = {}
 
         # Position cache: (book_id, symbol) -> Position
         self._positions: Dict[Tuple[str, str], Position] = {}
@@ -123,6 +129,7 @@ class TradingSystem:
 
         self._books[book_id] = book
         self._book_positions[book_id] = []
+        self._book_trades[book_id] = []
         return book
 
     def get_book(self, book_id: str) -> Optional[Book]:
@@ -194,15 +201,18 @@ class TradingSystem:
         ts = timestamp or datetime.now()
         trade_id = self._next_trade_id
         self._next_trade_id += 1
+        buyer_id = buyer.BookId()
+        seller_id = seller.BookId()
 
-        # Store in livetable for fast queries
+        # Store in livetable for fast queries and aggregates
         self._trades_table.append_row({
             "trade_id": trade_id,
             "symbol": symbol,
             "quantity": quantity,
             "price": price,
-            "buyer_book_id": buyer.BookId(),
-            "seller_book_id": seller.BookId(),
+            "notional": quantity * price,
+            "buyer_book_id": buyer_id,
+            "seller_book_id": seller_id,
             "timestamp": ts.isoformat(),
         })
 
@@ -212,8 +222,8 @@ class TradingSystem:
         trade.Symbol.set(symbol)
         trade.Quantity.set(quantity)
         trade.Price.set(price)
-        trade.BuyerBookId.set(buyer.BookId())
-        trade.SellerBookId.set(seller.BookId())
+        trade.BuyerBookId.set(buyer_id)
+        trade.SellerBookId.set(seller_id)
         trade.Timestamp.set(ts)
 
         # Set market price if known
@@ -221,10 +231,13 @@ class TradingSystem:
             trade.MarketPrice.set(self._market_prices[symbol])
 
         self._trades.append(trade)
+        self._symbol_trades.setdefault(symbol, []).append(trade)
+        self._book_trades[buyer_id].append(trade)
+        self._book_trades[seller_id].append(trade)
 
         # Update positions for both books
-        self._update_position(buyer.BookId(), symbol, quantity, price)
-        self._update_position(seller.BookId(), symbol, -quantity, price)
+        self._update_position(buyer_id, symbol, quantity, price)
+        self._update_position(seller_id, symbol, -quantity, price)
 
         return trade
 
@@ -311,9 +324,8 @@ class TradingSystem:
         self._market_prices[symbol] = price
 
         # Update all trades with this symbol
-        for trade in self._trades:
-            if trade.Symbol() == symbol:
-                trade.MarketPrice.set(price)
+        for trade in self._symbol_trades.get(symbol, ()):
+            trade.MarketPrice.set(price)
 
         # Update all positions with this symbol
         for pos in self._symbol_positions.get(symbol, ()):
@@ -368,11 +380,7 @@ class TradingSystem:
         Returns:
             List of Trade instances where book is buyer or seller
         """
-        book_id = book.BookId()
-        return [
-            t for t in self._trades
-            if t.BuyerBookId() == book_id or t.SellerBookId() == book_id
-        ]
+        return list(self._book_trades.get(book.BookId(), ()))
 
     def total_pnl(self) -> float:
         """Total P&L (realized plus unrealized) across all books.
@@ -383,8 +391,10 @@ class TradingSystem:
         return sum(book.TotalPnL() for book in self._books.values())
 
     def total_volume(self) -> float:
-        """Total notional volume of all trades."""
-        return sum(trade.Notional() for trade in self._trades)
+        """Total notional volume of all trades (as executed)."""
+        if not self._trades:
+            return 0.0
+        return self._trades_table.sum("notional")
 
     @property
     def num_trades(self) -> int:

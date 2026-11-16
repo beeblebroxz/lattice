@@ -23,7 +23,7 @@ from typing import Dict, Any, Optional
 import dag
 
 from .sensitivities import (
-    delta, gamma, vega, theta, rho, dv01, dv01_input, value_output,
+    delta_gamma, vega, theta, rho, dv01, dv01_input, value_output,
 )
 from .shocks import shocked_value
 
@@ -116,8 +116,9 @@ class RiskEngine:
             # Delta and Gamma (require Spot)
             if priced and hasattr(inst, "Spot"):
                 try:
-                    results[name]["delta"] = delta(inst, bump)
-                    results[name]["gamma"] = gamma(inst, bump)
+                    results[name]["delta"], results[name]["gamma"] = delta_gamma(
+                        inst, bump
+                    )
                 except Exception as e:
                     logger.warning("Failed to compute delta/gamma for %s: %s", name, e)
 

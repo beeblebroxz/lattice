@@ -83,7 +83,7 @@ print(f"Total P&L: ${desk.TotalPnL():.2f}")
 | `RealizedPnL()` | P&L locked in by reducing, closing or flipping positions |
 | `NetExposure()` / `GrossExposure()` | Signed / absolute sum of position market values |
 | `LongExposure()` / `ShortExposure()` | Market value of long / short positions |
-| `Delta()` / `Vega()` / `Gamma()` | Portfolio Greeks (sum over instrument-linked positions) |
+| `Delta()` / `Vega()` / `Gamma()` | Portfolio Greeks (sum of the position Greeks below) |
 
 ## Trade
 
@@ -136,6 +136,11 @@ for pos in desk.Positions():
 | `UnrealizedPnL()` | MarketValue − Quantity × AvgPrice |
 | `RealizedPnL()` | P&L realized by trades that reduced, closed or flipped the position |
 | `TotalPnL()` | Realized plus unrealized |
+| `Delta()` / `Gamma()` / `Vega()` | Quantity × the linked instrument's Greek (0 if there is no instrument, or it lacks the input) |
+| `Greeks()` | The three above as a dict, computed together |
+
+Position Greeks are cached: after a tick on one instrument, only positions in
+that instrument are revalued, and a book's Greeks are a sum over cached values.
 
 Adding to a position re-averages `AvgPrice`. Reducing it keeps `AvgPrice` and
 realizes `closed quantity × (trade price − AvgPrice)` (sign reversed for a
@@ -243,7 +248,9 @@ blotter.show()
 | `by_symbol(symbol)` | Filter trades by symbol |
 | `buys()` | Filter to buy trades |
 | `sells()` | Filter to sell trades |
-| `filter(predicate)` | Create a filtered view |
+| `filter(predicate)` | Create a filtered view (calls the predicate per row; slower than the three above on large blotters) |
+| `tail(n)` | The most recent n trades |
+| `show(max_rows=1000)` | Open the blotter in a browser, showing the most recent `max_rows` trades |
 
 ### Properties
 
